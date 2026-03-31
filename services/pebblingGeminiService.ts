@@ -19,9 +19,13 @@ const DEFAULT_CONFIG: ThirdPartyApiConfig = {
   chatModel: 'gemini-2.5-pro'
 };
 
-// 获取配置
+// 获取配置（优先读浏览器缓存；打开面板时 ApiSettings 会从服务端刷新）
 export const getApiConfig = (): ThirdPartyApiConfig => {
   try {
+    const tp = localStorage.getItem('third_party_api_config');
+    if (tp) {
+      return { ...DEFAULT_CONFIG, ...JSON.parse(tp) };
+    }
     const saved = localStorage.getItem('t8star_api_config');
     if (saved) {
       return { ...DEFAULT_CONFIG, ...JSON.parse(saved) };
@@ -32,15 +36,19 @@ export const getApiConfig = (): ThirdPartyApiConfig => {
   return DEFAULT_CONFIG;
 };
 
-// 保存配置
+// 保存配置（同步到本地 data/settings.json 中的 thirdPartyConfig）
 export const saveApiConfig = (config: ThirdPartyApiConfig): void => {
   localStorage.setItem('t8star_api_config', JSON.stringify(config));
+  localStorage.setItem('third_party_api_config', JSON.stringify(config));
+  void import('./api/ai')
+    .then(({ setAiConfig }) => setAiConfig(config as import('../types').ThirdPartyApiConfig))
+    .catch((e) => console.warn('同步 API 配置到 settings.json 失败:', e));
 };
 
-// 检查 API Key 是否已配置
+// 检查 API Key 是否已配置（兼容方舟等非 sk- 前缀密钥）
 export const isApiConfigured = (): boolean => {
   const config = getApiConfig();
-  return !!(config.apiKey && config.apiKey.startsWith('sk-'));
+  return !!(config.apiKey && String(config.apiKey).trim().length > 0);
 };
 
 // 辅助函数：File 转 base64

@@ -1,0 +1,18 @@
+{
+  "theme": "dark",
+  "geminiApiKey": "",
+  "comfyuiConfig": {
+    "enabled": true,
+    "baseUrl": "http://127.0.0.1:8188"
+  },
+  "thirdPartyConfig": {
+    "enabled": true,
+    "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+    "apiKey": "1733c03b-f216-4c82-b58b-5a8bff38e671",
+    "model": "doubao-seedream-4-0-250828",
+    "imageModelI2i": "doubao-seedream-4-0-250828",
+    "chatModel": "doubao-1-5-lite-32k-250115",
+    "videoModel": "doubao-seedance-1-5-pro-251215",
+    "videoModelI2v": "doubao-seedance-1-5-pro-251215"
+  }
+}

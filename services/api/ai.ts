@@ -1,6 +1,21 @@
 // AI 代理相关 API - 通过后端调用 AI 服务
-import { get, post } from './index';
+import { del, get, post, put } from './index';
 import { ThirdPartyApiConfig, NanoBananaRequest, NanoBananaResponse, OpenAIChatRequest, OpenAIChatResponse } from '../../types';
+
+export interface AiChatSession {
+  id: string;
+  title: string;
+  messages: Array<{
+    id: string;
+    role: 'system' | 'user' | 'assistant';
+    content: string;
+    images?: string[];
+    timestamp: number;
+  }>;
+  createdAt: number;
+  updatedAt: number;
+  isPinned: boolean;
+}
 
 // 获取 API 配置
 export const getAiConfig = async (): Promise<{ success: boolean; data?: Partial<ThirdPartyApiConfig>; error?: string }> => {
@@ -17,9 +32,93 @@ export const generateImage = async (request: NanoBananaRequest): Promise<{ succe
   return post<NanoBananaResponse>('/ai/generate-image', request);
 };
 
-// AI 聊天（用于文本分析）
-export const chatCompletion = async (request: OpenAIChatRequest): Promise<{ success: boolean; data?: OpenAIChatResponse; error?: string }> => {
-  return post<OpenAIChatResponse>('/ai/chat', request);
+// 非流式聊天（用于直接返回内容）
+export const chatCompletionSync = async (
+  request: OpenAIChatRequest
+): Promise<{ success: boolean; data?: { content: string }; error?: string }> => {
+  return post<{ content: string }>('/ai/chat/sync', request);
+};
+
+/**
+ * 非流式聊天：走 `/ai/chat/sync`，返回 OpenAI 兼容结构（便于沿用 choices[0].message.content）。
+ * 流式请直接使用 fetch('/api/ai/chat') 读 SSE（见 ChatPage.streamChatCompletion）。
+ */
+export const chatCompletion = async (
+  request: OpenAIChatRequest
+): Promise<{ success: boolean; data?: OpenAIChatResponse; error?: string }> => {
+  if (request.stream) {
+    return {
+      success: false,
+      error: 'chatCompletion 仅支持非流式；流式请使用 fetch 读取 /api/ai/chat',
+    };
+  }
+  const r = await chatCompletionSync(request);
+  if (!r.success || r.data == null) {
+    return { success: false, error: r.error || '请求失败' };
+  }
+  const content = typeof r.data.content === 'string' ? r.data.content : '';
+  const data: OpenAIChatResponse = {
+    id: 'chatcmpl-local',
+    object: 'chat.completion',
+    created: Math.floor(Date.now() / 1000),
+    choices: [
+      {
+        index: 0,
+        message: { role: 'assistant', content },
+        finish_reason: 'stop',
+      },
+    ],
+  };
+  return { success: true, data };
+};
+
+/** 方舟 contents/generations/tasks：文生视频 / 图生视频（有 referenceMediaUrls 时后端默认用 videoModelI2v） */
+export const generateVideoTask = async (body: {
+  prompt: string;
+  options?: Record<string, unknown>;
+  referenceMediaUrls?: string[];
+  /** 覆盖 settings 中的 videoModel / videoModelI2v */
+  model?: string;
+}): Promise<{ success: boolean; data?: any; error?: string }> => {
+  return post<any>('/ai/generate-video', body);
+};
+
+// 查询方舟生成任务状态
+export const getVideoTask = async (
+  taskId: string
+): Promise<{ success: boolean; data?: any; error?: string }> => {
+  return get<any>(`/ai/video-task/${taskId}`);
+};
+
+// ========== 会话（历史对话） ==========
+export const getChatSessions = async (): Promise<{ success: boolean; data?: AiChatSession[]; error?: string }> => {
+  return get<AiChatSession[]>('/ai/sessions');
+};
+
+export const createChatSession = async (
+  title?: string
+): Promise<{ success: boolean; data?: AiChatSession; error?: string }> => {
+  return post<AiChatSession>('/ai/sessions', { title });
+};
+
+export const updateChatSession = async (
+  id: string,
+  patch: Partial<Pick<AiChatSession, 'title' | 'isPinned'>>
+): Promise<{ success: boolean; data?: AiChatSession; error?: string }> => {
+  return put<AiChatSession>(`/ai/sessions/${id}`, patch);
+};
+
+export const deleteChatSession = async (
+  id: string
+): Promise<{ success: boolean; message?: string; error?: string }> => {
+  return del<any>(`/ai/sessions/${id}`);
+};
+
+export const addChatMessage = async (
+  sessionId: string,
+  body: { role: 'user' | 'assistant'; content: string; images?: string[] }
+): Promise<{ success: boolean; data?: any; error?: string }> => {
+  return post<any>(`/ai/sessions/${sessionId}/messages`, body);
 };
 
 // 测试 API 连接
@@ -61,7 +160,7 @@ export const analyzeImage = async (
   };
 
   const result = await chatCompletion(request);
-  
+
   if (result.success && result.data?.choices?.[0]?.message?.content) {
     return {
       success: true,

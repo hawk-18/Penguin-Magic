@@ -161,18 +161,33 @@ export interface ThirdPartyApiConfig {
   enabled: boolean;
   baseUrl: string;
   apiKey: string;
-  model: string; // 图片生成模型，默认使用 nano-banana-2
+  model: string; // 文生图默认模型
+  /** 图生图默认模型（有 image 参考且请求未指定 model 时由后端选用） */
+  imageModelI2i?: string;
   chatModel?: string; // 分析模型，用于BP智能体和Smart模式，如 gemini-2.5-pro
+  /** 文生视频默认模型 */
+  videoModel?: string;
+  /** 图生视频默认模型（有图片参考且请求未指定 model 时由后端选用） */
+  videoModelI2v?: string;
 }
 
-// Nano-banana API 请求参数
+// 方舟 /images/generations 请求（文生图 + 图生图）
 export interface NanoBananaRequest {
-  model: string;
+  model?: string;
   prompt: string;
   response_format?: 'url' | 'b64_json';
   aspect_ratio?: '4:3' | '3:4' | '16:9' | '9:16' | '2:3' | '3:2' | '1:1' | '4:5' | '5:4' | '21:9';
-  image?: string[]; // 参考图数组，url 或 b64_json
+  /** 图生图参考：单张 URL 字符串或多张 url/base64（与方舟 images/generations 一致） */
+  image?: string | string[];
+  /** 一次生成张数；多参考图时与 sequential_image_generation_options.max_images 对应 */
+  generationCount?: number;
   image_size?: '1K' | '2K' | '4K';
+  /** 如 "1024x1024"、"2K" */
+  size?: string;
+  guidance_scale?: number;
+  watermark?: boolean;
+  sequential_image_generation?: string;
+  stream?: boolean;
   seed?: number; // 随机种子，用于重复生成相同结果或变化生成
 }
 

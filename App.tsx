@@ -1,5 +1,7 @@
 
-import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
+import type { LucideIcon } from 'lucide-react';
 import { ImageUploader } from './components/ImageUploader';
 import { normalizeImageUrl } from './utils/image';
 import { GeneratedImageDisplay } from './components/GeneratedImageDisplay';
@@ -11,7 +13,7 @@ import { AddCreativeIdeaModal } from './components/AddCreativeIdeaModal';
 import { SettingsModal } from './components/SettingsModal';
 import { CreativeLibrary } from './components/CreativeLibrary';
 import { WelcomeScreen } from './components/WelcomeScreen';
-import { Library as LibraryIcon, Settings as SettingsIcon, Zap as BoltIcon, PlusCircle as PlusCircleIcon, Image as ImageIcon, Lightbulb as LightbulbIcon, AlertTriangle as WarningIcon, Plug as PlugIcon, Gem as DiamondIcon, Sun, Moon, HelpCircle, Home, Database, Maximize2, X, Lock, Edit as EditIcon, Star, Trash2, Clock, Grid3x3, Monitor, Folder, Check, ChevronDown, Minus, Plus } from 'lucide-react';
+import { Library as LibraryIcon, Settings as SettingsIcon, Zap as BoltIcon, PlusCircle as PlusCircleIcon, Image as ImageIcon, Lightbulb as LightbulbIcon, AlertTriangle as WarningIcon, Plug as PlugIcon, Gem as DiamondIcon, Sun, Moon, HelpCircle, Home, Database, Maximize2, X, Lock, Edit as EditIcon, Star, Trash2, Clock, Grid3x3, Monitor, Folder, Check, ChevronDown, Minus, Plus, MessageSquare } from 'lucide-react';
 import { GenerateButton } from './components/GenerateButton';
 import { HistoryStrip } from './components/HistoryStrip';
 import * as creativeIdeasApi from './services/api/creativeIdeas';
@@ -23,7 +25,17 @@ import { ThemeProvider, useTheme, SnowfallEffect } from './contexts/ThemeContext
 import { Desktop, createDesktopItemFromHistory, TOP_OFFSET } from './components/Desktop';
 import { HistoryDock } from './components/HistoryDock';
 import PebblingCanvas from './components/PebblingCanvas';
+import { ChatPage } from './components/Chat/ChatPage';
 
+type AppMainView = 'editor' | 'local-library' | 'canvas' | 'chat';
+
+/** 主视图顶栏四项（Portal 到 body：固定于顶部居中；宿主仅占标签条尺寸，避免全屏透明层在部分环境下吞掉点击） */
+const APP_VIEW_TAB_ITEMS: { id: AppMainView; label: string; Icon: LucideIcon }[] = [
+  { id: 'chat', label: 'Chat', Icon: MessageSquare },
+  { id: 'editor', label: '桌面', Icon: Monitor },
+  { id: 'local-library', label: '本地创意', Icon: Folder },
+  { id: 'canvas', label: '画布', Icon: Grid3x3 },
+];
 
 interface LeftPanelProps {
   files: File[];
@@ -57,6 +69,7 @@ interface LeftPanelProps {
   isThirdPartyApiEnabled: boolean;
   onClearTemplate: () => void;
   backendStatus: 'connected' | 'disconnected' | 'checking'; // 后端连接状态
+  onOpenChat?: () => void;
 }
 
 interface RightPanelProps {
@@ -64,7 +77,7 @@ interface RightPanelProps {
   creativeIdeas: CreativeIdea[];
   handleUseCreativeIdea: (idea: CreativeIdea) => void;
   setAddIdeaModalOpen: (isOpen: boolean) => void;
-  setView: (view: 'editor' | 'local-library' | 'canvas') => void;
+  setView: (view: AppMainView) => void;
   onDeleteIdea: (id: number) => void;
   onEditIdea: (idea: CreativeIdea) => void;
   onToggleFavorite?: (id: number) => void; // 切换收藏状态
@@ -72,8 +85,8 @@ interface RightPanelProps {
 }
 
 interface CanvasProps {
-  view: 'editor' | 'local-library' | 'canvas';
-  setView: (view: 'editor' | 'local-library' | 'canvas') => void;
+  view: AppMainView;
+  setView: (view: AppMainView) => void;
   files: File[];
   onUploadClick: () => void;
   creativeIdeas: CreativeIdea[];
@@ -176,6 +189,7 @@ const LeftPanel: React.FC<LeftPanelProps> = ({
   isThirdPartyApiEnabled,
   onClearTemplate,
   backendStatus,
+  onOpenChat,
 }) => {
   const { theme, themeName, setTheme } = useTheme();
   
@@ -281,6 +295,28 @@ const LeftPanel: React.FC<LeftPanelProps> = ({
         </div>
         
         <div className="flex items-center gap-1">
+          {onOpenChat && (
+            <button
+              type="button"
+              onClick={onOpenChat}
+              className="w-7 h-7 rounded-full flex items-center justify-center transition-all duration-200"
+              style={{
+                color: isDark ? '#9ca3af' : '#64748b',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)';
+                e.currentTarget.style.color = isDark ? '#fff' : '#0f172a';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'transparent';
+                e.currentTarget.style.color = isDark ? '#9ca3af' : '#64748b';
+              }}
+              title="聊天"
+              aria-label="打开聊天"
+            >
+              <MessageSquare className="w-3.5 h-3.5" />
+            </button>
+          )}
           {/* 明暗切换 */}
           <button
             onClick={toggleDarkMode}
@@ -1315,7 +1351,7 @@ const RightPanel: React.FC<RightPanelProps> = ({
           {ideas.slice(0, 5).map(idea => renderIdeaItem(idea))}
           {ideas.length > 5 && (
             <button 
-              onClick={() => setView('library')}
+              onClick={() => setView('local-library')}
               className="w-full py-1.5 text-[10px] text-blue-400 hover:text-blue-300 transition-colors"
             >
               查看全部 {ideas.length} 个...
@@ -1483,15 +1519,16 @@ const Canvas: React.FC<CanvasProps> = ({
 }) => {
   const { theme, themeName } = useTheme();
   const isDark = themeName !== 'light';
-  
+  const isSolidView = view === 'chat' || view === 'canvas';
+  const solidBg = isDark ? '#000' : '#fff';
+
   return (
    <main 
-     className="flex-1 flex flex-col min-w-0 relative overflow-hidden select-none" 
-     style={{ backgroundColor: theme.colors.bgPrimary }}
+     className="flex-1 flex flex-col min-w-0 min-h-0 relative overflow-hidden select-none" 
+     style={{ backgroundColor: isSolidView ? solidBg : theme.colors.bgPrimary, pointerEvents: 'auto' }}
      onDragStart={(e) => e.preventDefault()}
    >
-      {/* 背景效果 - 适配明暗主题 */}
-      {isDark ? (
+      {!isSolidView && (isDark ? (
         <>
           <div className="absolute inset-0 bg-gradient-to-br from-blue-950/10 via-gray-950 to-gray-950 pointer-events-none"></div>
           <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(59,130,246,0.15),transparent)] pointer-events-none"></div>
@@ -1501,47 +1538,26 @@ const Canvas: React.FC<CanvasProps> = ({
           <div className="absolute inset-0 bg-gradient-to-br from-blue-50/20 via-white to-gray-50/20 pointer-events-none"></div>
           <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(59,130,246,0.08),transparent)] pointer-events-none"></div>
         </>
-      )}
-      
-      {/* 顶部切换标签 */}
-      <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[60] liquid-tabs">
-        <button
-          onClick={() => setView('editor')}
-          className={`liquid-tab flex items-center gap-1 ${
-            view === 'editor' ? 'active' : ''
-          }`}
-        >
-          <Monitor className="w-3 h-3" />
-          桌面
-        </button>
-        <button
-          onClick={() => setView('local-library')}
-          className={`liquid-tab flex items-center gap-1 ${
-            view === 'local-library' ? 'active' : ''
-          }`}
-        >
-          <Folder className="w-3 h-3" />
-          本地创意
-          {localCreativeIdeas.length > 0 && (
-            <span className="px-1 py-0.5 text-[8px] rounded bg-white/20 font-medium">
-              {localCreativeIdeas.length}
-            </span>
-          )}
-        </button>
-        <button
-          onClick={() => setView('canvas')}
-          className={`liquid-tab flex items-center gap-1 ${
-            view === 'canvas' ? 'active' : ''
-          }`}
-        >
-          <Grid3x3 className="w-3 h-3" />
-          画布
-        </button>
+      ))}
 
+      {/* 画布始终挂载：切换桌面 / Chat / 本地创意 时不卸载，保留节点、浮动生成面板与进行中的图片/视频任务 */}
+      <div
+        className={`absolute inset-0 min-h-0 pt-12 flex flex-col ${
+          view === 'canvas' ? 'z-50' : 'z-[5] invisible pointer-events-none'
+        }`}
+        aria-hidden={view !== 'canvas'}
+      >
+        <PebblingCanvas
+          onImageGenerated={onCanvasImageGenerated}
+          onCanvasCreated={onCanvasCreated}
+          creativeIdeas={creativeIdeas}
+          isActive={view === 'canvas'}
+          pendingImageToAdd={pendingCanvasImage}
+          onPendingImageAdded={onClearPendingCanvasImage}
+        />
       </div>
       
       {view === 'local-library' ? (
-        /* 创意库全屏显示 - 支持卡片拖拽排序 */
         <div className="absolute inset-0 z-50 pt-12">
           <CreativeLibrary
             ideas={localCreativeIdeas}
@@ -1561,21 +1577,13 @@ const Canvas: React.FC<CanvasProps> = ({
             isImportingById={isImportingById}
           />
         </div>
-      ) : view === 'canvas' ? (
-        /* 画布全屏显示 */
-        <div className="absolute inset-0 z-50 pt-12">
-          <PebblingCanvas 
-            onImageGenerated={onCanvasImageGenerated} 
-            onCanvasCreated={onCanvasCreated}
-            creativeIdeas={creativeIdeas}
-            isActive={view === 'canvas'}
-            pendingImageToAdd={pendingCanvasImage}
-            onPendingImageAdded={onClearPendingCanvasImage}
-          />
+      ) : view === 'chat' ? (
+        <div className="absolute inset-0 z-[55] min-h-0 flex flex-col select-text">
+          <ChatPage onExitToDesktop={() => setView('editor')} />
         </div>
       ) : null}
       
-      {/* 桌面模式 - 始终显示（画布模式下作为背景） */}
+      {view !== 'chat' && (
       <div className={`relative z-10 flex-1 overflow-hidden ${view === 'canvas' ? 'pointer-events-none' : ''}`}>
           <Desktop
             items={desktopItems}
@@ -1597,14 +1605,12 @@ const Canvas: React.FC<CanvasProps> = ({
             creativeIdeas={creativeIdeas}
             onFileDrop={onFileDrop}
             onCreateCreativeIdea={onCreateCreativeIdea}
-            isActive={view !== 'canvas'}
+            isActive={view !== 'canvas' && view !== 'chat'}
             onAddToCanvas={onAddToCanvas}
           />
           
-          {/* 生成结果浮层 - 毛玻璃效果 + 最小化联动 */}
           {(status === ApiStatus.Loading || (status === ApiStatus.Success && content) || (status === ApiStatus.Error && error)) && (
             <>
-              {/* 正常展开状态 - 居中显示 */}
               {!isResultMinimized && (
                 <div className="absolute bottom-28 left-1/2 -translate-x-1/2 z-40 animate-scale-in">
                   <div className="
@@ -1616,7 +1622,6 @@ const Canvas: React.FC<CanvasProps> = ({
                     ring-1 ring-blue-500/20
                     overflow-hidden p-5
                   ">
-                    {/* 标题栏 */}
                     <div className="flex items-center justify-between mb-4 pb-3 border-b border-white/10">
                       <div className="flex items-center gap-3">
                         {status === ApiStatus.Loading ? (
@@ -1677,6 +1682,7 @@ const Canvas: React.FC<CanvasProps> = ({
             </>
           )}
         </div>
+      )}
    </main>
   );
 };
@@ -1719,7 +1725,7 @@ const App: React.FC = () => {
     return [...localCreativeIdeas].sort((a, b) => (b.order || 0) - (a.order || 0));
   }, [localCreativeIdeas]);
   
-  const [view, setView] = useState<'editor' | 'local-library' | 'canvas'>('editor'); // 默认桌面模式
+  const [view, setView] = useState<AppMainView>('editor'); // 默认桌面模式
   const [isAddIdeaModalOpen, setAddIdeaModalOpen] = useState(false);
   const [editingIdea, setEditingIdea] = useState<CreativeIdea | null>(null);
   const [presetImageForNewIdea, setPresetImageForNewIdea] = useState<string | null>(null); // 从桌面图片创建创意库时的预设图片
@@ -1788,6 +1794,49 @@ const App: React.FC = () => {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const importIdeasInputRef = useRef<HTMLInputElement>(null);
+  /** 顶栏 nav 引用：Portal 挂在 body 时，个别环境（全屏/最大化、合成层）下 React 冒泡 click 不可靠，需配合下方 capture */
+  const viewTabsNavRef = useRef<HTMLElement | null>(null);
+
+  /** 顶栏 Portal 宿主：仅占标签条区域，pointer-events:auto，不铺全屏（全屏/最大化时全屏透明层曾导致顶栏无法命中） */
+  const [viewTabPortalHost, setViewTabPortalHost] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    if (typeof document === 'undefined') return;
+    let el = document.getElementById('app-view-tab-bar-root');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'app-view-tab-bar-root';
+      document.body.appendChild(el);
+    }
+    Object.assign(el.style, {
+      position: 'fixed',
+      top: '12px',
+      left: '50%',
+      transform: 'translateX(-50%)',
+      width: 'max-content',
+      maxWidth: 'calc(100vw - 1rem)',
+      pointerEvents: 'auto',
+      zIndex: '2147483646',
+    });
+    setViewTabPortalHost(el);
+  }, []);
+
+  useEffect(() => {
+    const nav = viewTabsNavRef.current;
+    if (!nav) return;
+    const labels = new Set<AppMainView>(['chat', 'editor', 'local-library', 'canvas']);
+    const onClickCapture = (e: MouseEvent) => {
+      const t = e.target;
+      if (!(t instanceof Element)) return;
+      const btn = t.closest('button[data-view-tab]');
+      if (!btn || !nav.contains(btn)) return;
+      const v = btn.getAttribute('data-view-tab');
+      if (!v || !labels.has(v as AppMainView)) return;
+      e.stopPropagation();
+      setView(v as AppMainView);
+    };
+    nav.addEventListener('click', onClickCapture, true);
+    return () => nav.removeEventListener('click', onClickCapture, true);
+  }, [viewTabPortalHost]);
 
   useEffect(() => {
     const savedApiKey = localStorage.getItem('gemini_api_key');
@@ -1817,13 +1866,14 @@ const App: React.FC = () => {
         console.error('Failed to parse third party API config:', e);
       }
     } else {
-      // 默认配置
+      // 默认配置 - 火山引擎方舟API
       const defaultConfig: ThirdPartyApiConfig = {
-        enabled: false,
-        baseUrl: 'https://ai.t8star.cn',
-        apiKey: '',
-        model: 'nano-banana-2',
-        chatModel: 'gemini-2.5-pro'
+        enabled: true,
+        baseUrl: 'https://ark.cn-beijing.volces.com',
+        apiKey: '1733c03b-f216-4c82-b58b-5a8bff38e671',
+        model: 'doubao-seedance-1-0-lite-t2v-250428',
+        chatModel: 'doubao-1-5-lite-32k-250115',
+        videoModel: 'doubao-seedance-1-0-lite-t2v-250428'
       };
       setThirdPartyApiConfig(defaultConfig);
       setThirdPartyConfig(defaultConfig);
@@ -3451,7 +3501,8 @@ const App: React.FC = () => {
       className="h-screen font-sans flex flex-row overflow-hidden selection:bg-blue-500/30 transition-colors duration-300"
       style={{ 
         backgroundColor: theme.colors.bgPrimary,
-        color: theme.colors.textPrimary
+        color: theme.colors.textPrimary,
+        pointerEvents: 'none'
       }}
     >
       {/* 雪花效果 */}
@@ -3473,9 +3524,9 @@ const App: React.FC = () => {
         onChange={handleImportIdeas}
       />
       
-      {/* 左侧面板 - 画布模式下隐藏 */}
-      {view !== 'canvas' && (
-      <div className="flex-shrink-0">
+      {/* 左侧面板 - 画布/聊天模式下隐藏 */}
+      {view !== 'canvas' && view !== 'chat' && (
+      <div className="flex-shrink-0" style={{ pointerEvents: 'auto' }}>
         <LeftPanel 
             files={files}
             activeFileIndex={activeFileIndex}
@@ -3509,10 +3560,37 @@ const App: React.FC = () => {
             isThirdPartyApiEnabled={thirdPartyApiConfig.enabled}
             onClearTemplate={handleClearTemplate}
             backendStatus={backendStatus}
+            onOpenChat={() => setView('chat')}
           />
         </div>
       )}
-      <div className="relative flex-1 flex min-w-0">
+      {viewTabPortalHost &&
+        createPortal(
+          <nav
+            ref={viewTabsNavRef}
+            className="liquid-tabs flex flex-row flex-wrap justify-center items-stretch gap-0"
+            aria-label="主视图切换"
+          >
+            {APP_VIEW_TAB_ITEMS.map(({ id, label, Icon }) => (
+              <button
+                key={id}
+                type="button"
+                data-view-tab={id}
+                className={`liquid-tab inline-flex items-center justify-center gap-1 shrink-0 min-h-[36px] px-3.5 ${view === id ? 'active' : ''}`}
+              >
+                <Icon className="w-3 h-3 shrink-0" aria-hidden />
+                <span>{label}</span>
+                {id === 'local-library' && localCreativeIdeas.length > 0 ? (
+                  <span className="px-1 py-0.5 text-[8px] rounded bg-white/20 font-medium tabular-nums">
+                    {localCreativeIdeas.length}
+                  </span>
+                ) : null}
+              </button>
+            ))}
+          </nav>,
+          viewTabPortalHost
+        )}
+      <div className="relative flex-1 flex min-w-0 min-h-0" style={{ pointerEvents: 'auto' }}>
         <Canvas 
           view={view}
           setView={setView}
@@ -3642,9 +3720,9 @@ const App: React.FC = () => {
              </div>
         )}
       </div>
-      {/* 右侧面板 - 画布模式下隐藏 */}
-      {view !== 'canvas' && (
-      <div className="flex-shrink-0">
+      {/* 右侧面板 - 画布/聊天模式下隐藏 */}
+      {view !== 'canvas' && view !== 'chat' && (
+      <div className="flex-shrink-0" style={{ pointerEvents: 'auto' }}>
         <RightPanel 
           creativeIdeas={creativeIdeas}
           handleUseCreativeIdea={handleUseCreativeIdea}

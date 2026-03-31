@@ -1,7 +1,9 @@
 
 import React, { useState, useEffect, useRef, Suspense, lazy } from 'react';
+import { createPortal } from 'react-dom';
 import { CanvasNode, NodeType, getNodeTypeColor } from '../../types/pebblingTypes';
 import { Icons } from './Icons';
+import { ImageSuggestionPanel } from './ImageSuggestionPanel';
 import { ChevronDown } from 'lucide-react';
 
 // 香蕉SVG图标组件
@@ -19,6 +21,16 @@ const BananaIcon: React.FC<{ size?: number; className?: string }> = ({ size = 14
 
 // 动态导入 3D 组件以避免影响初始加载
 const MultiAngle3D = lazy(() => import('./MultiAngle3D'));
+
+/** 与侧栏 ImageSuggestionKind 一致，用于从图片节点打开浮动生成面板 */
+type CanvasImageOutKind =
+  | 'native-image'
+  | 'native-video'
+  | 'remove-bg'
+  | 'enhance-details'
+  | 'expand-image';
+
+const OUTPUT_DRAG_THRESHOLD_PX = 8;
 
 interface CanvasNodeProps {
   node: CanvasNode;
@@ -76,10 +88,14 @@ const CanvasNodeItem: React.FC<CanvasNodeProps> = ({
   const [showMediaInfo, setShowMediaInfo] = useState(false);
   const [showToolbox, setShowToolbox] = useState(false);
   const [mediaMetadata, setMediaMetadata] = useState<{width: number, height: number, size: string, format: string, duration?: string} | null>(null);
+  /** 图片节点输出侧：点击打开能力菜单时的屏幕坐标 */
+  const [imageOutputMenu, setImageOutputMenu] = useState<{ x: number; y: number } | null>(null);
 
   const [isResizing, setIsResizing] = useState(false);
   const nodeRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageOutputPortRef = useRef<HTMLDivElement | null>(null);
+  const imageOutputDragRef = useRef<{ startX: number; startY: number; linkingStarted: boolean } | null>(null);
 
   useEffect(() => {
     setLocalContent(node.content);
@@ -174,6 +190,12 @@ const CanvasNodeItem: React.FC<CanvasNodeProps> = ({
     }
   }, [node.content, node.title, node.data, node.type]);
 
+  const getSafeSettings = () => {
+    const raw = node.data?.settings;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, any>;
+    return {};
+  };
+
   // Enter Key to Edit shortcut
   useEffect(() => {
       if (isSelected && !isEditing && (node.type === 'text' || node.type === 'idea')) {
@@ -243,6 +265,84 @@ const CanvasNodeItem: React.FC<CanvasNodeProps> = ({
       onStartConnection(node.id, type, { x, y });
   };
 
+  const hasImageNodeContent =
+    node.type === 'image' &&
+    !!node.content &&
+    (node.content.startsWith('data:image') ||
+      node.content.startsWith('http://') ||
+      node.content.startsWith('https://') ||
+      node.content.startsWith('//') ||
+      node.content.startsWith('/files/') ||
+      node.content.startsWith('/api/'));
+
+  useEffect(() => {
+    if (!imageOutputMenu) return;
+    const close = () => setImageOutputMenu(null);
+    document.addEventListener('mousedown', close);
+    document.addEventListener('resize', close);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('resize', close);
+    };
+  }, [imageOutputMenu]);
+
+  const openComposerFromImageMenu = (kind: CanvasImageOutKind) => {
+    if (!imageOutputMenu) return;
+    window.dispatchEvent(
+      new CustomEvent('pebbling-open-composer', {
+        detail: {
+          kind,
+          x: imageOutputMenu.x,
+          y: imageOutputMenu.y,
+          sourceNodeId: node.id,
+        },
+      })
+    );
+    setImageOutputMenu(null);
+  };
+
+  const handleImageOutputPortMouseDown = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    imageOutputDragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      linkingStarted: false,
+    };
+
+    const onMove = (ev: MouseEvent) => {
+      const s = imageOutputDragRef.current;
+      if (!s) return;
+      const dx = ev.clientX - s.startX;
+      const dy = ev.clientY - s.startY;
+      if (!s.linkingStarted && dx * dx + dy * dy > OUTPUT_DRAG_THRESHOLD_PX * OUTPUT_DRAG_THRESHOLD_PX) {
+        s.linkingStarted = true;
+        const el = imageOutputPortRef.current;
+        const rect = el?.getBoundingClientRect();
+        if (rect) {
+          onStartConnection(node.id, 'out', {
+            x: rect.left + rect.width / 2,
+            y: rect.top + rect.height / 2,
+          });
+        }
+      }
+    };
+
+    const onUp = (ev: MouseEvent) => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      const s = imageOutputDragRef.current;
+      imageOutputDragRef.current = null;
+      if (!s) return;
+      if (!s.linkingStarted) {
+        setImageOutputMenu({ x: ev.clientX, y: ev.clientY });
+      }
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
       if (e.target.files && e.target.files[0]) {
           const file = e.target.files[0];
@@ -283,6 +383,7 @@ const CanvasNodeItem: React.FC<CanvasNodeProps> = ({
   const inputPortColor = 'bg-zinc-600 border-zinc-400 group-hover/port:bg-white';
 
   const isRelay = node.type === 'relay';
+  const isComposerAnchor = node.type === 'composer-anchor';
   const isRunning = node.status === 'running';
   const isToolNode = ['edit', 'remove-bg', 'upscale', 'resize'].includes(node.type);
   const showRunningIndicator = isRunning && !isToolNode;
@@ -761,12 +862,23 @@ const CanvasNodeItem: React.FC<CanvasNodeProps> = ({
         );
     }
 
+    if (node.type === 'composer-anchor') {
+        return (
+            <div
+                className="w-full h-full flex items-center justify-center rounded-full bg-zinc-800/80 border border-white/30 shadow-md"
+                title="生成面板连接点"
+            >
+                <div className="w-1.5 h-1.5 rounded-full bg-white/80" />
+            </div>
+        );
+    }
+
     // BP节点 - 只展示变量输入和设置，执行后显示图片
     if (node.type === 'bp') {
         const bpTemplate = node.data?.bpTemplate;
         const bpInputs = node.data?.bpInputs || {};
         const bpFields = bpTemplate?.bpFields || [];
-        const settings = node.data?.settings || {};
+        const settings = getSafeSettings();
         // 检查是否有有效图片（支持 data:image, http://, https://, // 协议相对URL, /files/ 相对路径）
         // 注意：如果有下游连接，不显示图片（结果应该在下游节点显示）
         const hasImage = !hasDownstream && node.content && node.content.length > 10 && (
@@ -921,7 +1033,7 @@ const CanvasNodeItem: React.FC<CanvasNodeProps> = ({
 
     // Idea节点 - 类似BP的简化版本，包含提示词和设置
     if (node.type === 'idea') {
-        const settings = node.data?.settings || {};
+        const settings = getSafeSettings();
         const ideaTitle = node.title || '创意';
         
         return (
@@ -1202,8 +1314,10 @@ const CanvasNodeItem: React.FC<CanvasNodeProps> = ({
         // 检查是否有视频内容
         const hasVideo = node.content && (node.content.startsWith('data:video') || node.content.includes('.mp4'));
         
-        // 视频服务类型: 'sora' | 'veo'
+        // 视频服务类型: 'doubao' | 'sora' | 'veo'
         const videoService = node.data?.videoService || 'sora';
+        const arkVideoResolution = (node.data?.arkVideoResolution as string) || '1080p';
+        const arkVideoDuration = Number(node.data?.arkVideoDuration) || 5;
         
         // Sora settings
         const videoSize = node.data?.videoSize || '1280x720';
@@ -1225,7 +1339,37 @@ const CanvasNodeItem: React.FC<CanvasNodeProps> = ({
         // 有视频时显示播放器
         if (hasVideo) {
             return (
-                <div className="w-full h-full bg-black rounded-xl overflow-hidden relative">
+                <div className="w-full h-full bg-black rounded-xl overflow-hidden relative flex flex-col">
+                    <div
+                      className="flex items-center justify-center gap-1.5 shrink-0 py-1.5 px-2 bg-zinc-900/95 border-b border-white/10 z-30"
+                      onMouseDown={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        className="w-7 h-7 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center text-white/90 transition"
+                        title="重新生成"
+                        aria-label="重新生成"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onExecute(node.id);
+                        }}
+                      >
+                        <Icons.Refresh size={15} />
+                      </button>
+                      <button
+                        type="button"
+                        className="w-7 h-7 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center text-white/90 transition"
+                        title="下载视频"
+                        aria-label="下载视频"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDownload(node.id);
+                        }}
+                      >
+                        <Icons.Download size={15} />
+                      </button>
+                    </div>
+                    <div className="flex-1 relative min-h-0">
                     <video 
                         src={node.content} 
                         controls
@@ -1268,6 +1412,7 @@ const CanvasNodeItem: React.FC<CanvasNodeProps> = ({
                         </div>
                       )}
                     </div>
+                    </div>
                 </div>
             );
         }
@@ -1279,10 +1424,21 @@ const CanvasNodeItem: React.FC<CanvasNodeProps> = ({
                 <div className="h-7 border-b border-white/10 flex items-center justify-between px-3 bg-white/5 shrink-0">
                     <div className="flex items-center gap-1">
                         <Icons.Video size={12} className="text-white/70" />
-                        {/* TAB切换按钮 */}
-                        <div className="flex bg-black/40 rounded p-0.5 ml-1">
+                        <div className="flex bg-black/40 rounded p-0.5 ml-1 flex-wrap gap-0.5">
                             <button
-                                className={`px-2 py-0.5 text-[8px] font-bold uppercase rounded transition-all ${
+                                className={`px-1.5 py-0.5 text-[7px] font-bold uppercase rounded transition-all ${
+                                    videoService === 'doubao'
+                                        ? 'bg-emerald-500/35 text-emerald-200'
+                                        : 'text-zinc-500 hover:text-zinc-300'
+                                }`}
+                                onClick={() => handleVideoSettingChange('videoService', 'doubao')}
+                                onMouseDown={(e) => e.stopPropagation()}
+                                title="火山方舟 Seedance（画布默认）"
+                            >
+                                豆包
+                            </button>
+                            <button
+                                className={`px-1.5 py-0.5 text-[7px] font-bold uppercase rounded transition-all ${
                                     videoService === 'sora' 
                                         ? 'bg-white/20 text-white' 
                                         : 'text-zinc-500 hover:text-zinc-300'
@@ -1293,7 +1449,7 @@ const CanvasNodeItem: React.FC<CanvasNodeProps> = ({
                                 Sora
                             </button>
                             <button
-                                className={`px-2 py-0.5 text-[8px] font-bold uppercase rounded transition-all ${
+                                className={`px-1.5 py-0.5 text-[7px] font-bold uppercase rounded transition-all ${
                                     videoService === 'veo' 
                                         ? 'bg-purple-500/30 text-purple-300' 
                                         : 'text-zinc-500 hover:text-zinc-300'
@@ -1301,17 +1457,22 @@ const CanvasNodeItem: React.FC<CanvasNodeProps> = ({
                                 onClick={() => handleVideoSettingChange('videoService', 'veo')}
                                 onMouseDown={(e) => e.stopPropagation()}
                             >
-                                Veo3.1
+                                Veo
                             </button>
                         </div>
                     </div>
-                    <span className="text-[7px] text-white/40 uppercase">
-                        {videoService === 'sora' ? 'IMG+TXT → VIDEO' : (
-                            veoMode === 'text2video' ? 'TXT → VIDEO' :
-                            veoMode === 'image2video' ? 'IMG → VIDEO' :
-                            veoMode === 'keyframes' ? '首尾帧 → VIDEO' :
-                            '多图参考 → VIDEO'
-                        )}
+                    <span className="text-[7px] text-white/40 uppercase max-w-[120px] truncate text-right">
+                        {videoService === 'doubao'
+                            ? 'ARK · 连线图为参考'
+                            : videoService === 'sora'
+                              ? 'Sora'
+                              : veoMode === 'text2video'
+                                ? 'TXT → VIDEO'
+                                : veoMode === 'image2video'
+                                  ? 'IMG → VIDEO'
+                                  : veoMode === 'keyframes'
+                                    ? '首尾帧'
+                                    : '多图参考'}
                     </span>
                 </div>
                 
@@ -1327,6 +1488,65 @@ const CanvasNodeItem: React.FC<CanvasNodeProps> = ({
                         onMouseDown={(e) => e.stopPropagation()}
                     />
                     
+                    {/* 豆包 / 方舟 Seedance */}
+                    {videoService === 'doubao' && (
+                        <div className="flex flex-col gap-1.5">
+                            <div className="flex gap-1.5">
+                                <div className="flex flex-1 bg-black/40 rounded p-0.5">
+                                    <button
+                                        className={`flex-1 px-2 py-1 text-[9px] font-medium rounded transition-all ${videoSize === '1280x720' ? 'bg-white/20 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}
+                                        onClick={() => handleVideoSettingChange('videoSize', '1280x720')}
+                                        onMouseDown={(e) => e.stopPropagation()}
+                                    >
+                                        16:9
+                                    </button>
+                                    <button
+                                        className={`flex-1 px-2 py-1 text-[9px] font-medium rounded transition-all ${videoSize === '720x1280' ? 'bg-white/20 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}
+                                        onClick={() => handleVideoSettingChange('videoSize', '720x1280')}
+                                        onMouseDown={(e) => e.stopPropagation()}
+                                    >
+                                        9:16
+                                    </button>
+                                </div>
+                                <div className="flex flex-1 bg-black/40 rounded p-0.5">
+                                    <button
+                                        className={`flex-1 px-2 py-1 text-[9px] font-medium rounded transition-all ${arkVideoResolution === '1080p' ? 'bg-emerald-500/25 text-emerald-200' : 'text-zinc-400 hover:text-zinc-200'}`}
+                                        onClick={() => handleVideoSettingChange('arkVideoResolution', '1080p')}
+                                        onMouseDown={(e) => e.stopPropagation()}
+                                    >
+                                        1080p
+                                    </button>
+                                    <button
+                                        className={`flex-1 px-2 py-1 text-[9px] font-medium rounded transition-all ${arkVideoResolution === '720p' ? 'bg-emerald-500/25 text-emerald-200' : 'text-zinc-400 hover:text-zinc-200'}`}
+                                        onClick={() => handleVideoSettingChange('arkVideoResolution', '720p')}
+                                        onMouseDown={(e) => e.stopPropagation()}
+                                    >
+                                        720p
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="flex bg-black/40 rounded p-0.5">
+                                <button
+                                    className={`flex-1 px-2 py-1 text-[9px] font-medium rounded transition-all ${arkVideoDuration === 5 ? 'bg-emerald-500/25 text-emerald-200' : 'text-zinc-400 hover:text-zinc-200'}`}
+                                    onClick={() => handleVideoSettingChange('arkVideoDuration', 5)}
+                                    onMouseDown={(e) => e.stopPropagation()}
+                                >
+                                    5s
+                                </button>
+                                <button
+                                    className={`flex-1 px-2 py-1 text-[9px] font-medium rounded transition-all ${arkVideoDuration === 8 ? 'bg-emerald-500/25 text-emerald-200' : 'text-zinc-400 hover:text-zinc-200'}`}
+                                    onClick={() => handleVideoSettingChange('arkVideoDuration', 8)}
+                                    onMouseDown={(e) => e.stopPropagation()}
+                                >
+                                    8s
+                                </button>
+                            </div>
+                            <p className="text-[8px] text-zinc-500 leading-tight">
+                                从左侧连接图片节点：图生视频用 Seedance Pro Fast；仅文字为文生视频。
+                            </p>
+                        </div>
+                    )}
+
                     {/* Sora Settings */}
                     {videoService === 'sora' && (
                         <div className="flex flex-col gap-1.5">
@@ -1888,10 +2108,11 @@ const CanvasNodeItem: React.FC<CanvasNodeProps> = ({
   };
 
   return (
+    <>
     <div
       ref={nodeRef}
       className={`absolute transition-all duration-75 flex flex-col select-none
-        ${isRelay ? 'rounded-full' : 'rounded-xl'}
+        ${isRelay || isComposerAnchor ? 'rounded-full' : 'rounded-xl'}
         ${isSelected ? 'ring-2 ring-blue-500/50 z-50' : 'ring-1 ring-white/5 hover:ring-white/20 z-10'}
         ${isSelected && !isRelay ? 'shadow-2xl' : ''}
         ${isRunning ? 'ring-2 ring-yellow-500 animate-pulse' : ''}
@@ -1901,7 +2122,7 @@ const CanvasNodeItem: React.FC<CanvasNodeProps> = ({
         width: node.width,
         height: node.height,
         cursor: 'grab',
-        backgroundColor: isRelay ? 'transparent' : '#1c1c1e',
+        backgroundColor: isRelay ? 'transparent' : isComposerAnchor ? 'transparent' : '#1c1c1e',
         pointerEvents: 'auto',
       } as React.CSSProperties}
       onMouseDown={(e) => {
@@ -1919,16 +2140,31 @@ const CanvasNodeItem: React.FC<CanvasNodeProps> = ({
         className={`absolute left-0 top-1/2 -translate-x-1/2 -translate-y-1/2 w-3 h-3 rounded-full z-50 hover:scale-150 transition-all cursor-crosshair flex items-center justify-center border group/port ${inputPortColor}`}
         onMouseDown={(e) => handlePortDown(e, 'in')}
       />
-      <div 
-        className={`absolute right-0 top-1/2 translate-x-1/2 -translate-y-1/2 w-3 h-3 rounded-full z-50 hover:scale-150 transition-all cursor-crosshair flex items-center justify-center border ${outputPortColor}`}
-        onMouseDown={(e) => handlePortDown(e, 'out')}
-      />
+      {hasImageNodeContent ? (
+        <div
+          ref={imageOutputPortRef}
+          className="absolute right-0 top-1/2 translate-x-1/2 -translate-y-1/2 z-[55] flex items-center justify-center cursor-pointer"
+          onMouseDown={handleImageOutputPortMouseDown}
+        >
+          <div
+            className="w-7 h-7 rounded-full border border-white/45 bg-zinc-900/95 shadow-lg flex items-center justify-center hover:bg-zinc-800 hover:scale-105 transition-transform"
+            title="拖拽连线，或点击选择生成能力"
+          >
+            <Icons.Plus size={16} className="text-white/90" />
+          </div>
+        </div>
+      ) : (
+        <div 
+          className={`absolute right-0 top-1/2 translate-x-1/2 -translate-y-1/2 w-3 h-3 rounded-full z-50 hover:scale-150 transition-all cursor-crosshair flex items-center justify-center border ${outputPortColor}`}
+          onMouseDown={(e) => handlePortDown(e, 'out')}
+        />
+      )}
 
       {/* Content */}
       {renderContent()}
 
       {/* Modern Resize Handle */}
-      {isSelected && !isRelay && (
+      {isSelected && !isRelay && !isComposerAnchor && (
           <div 
             className="absolute bottom-0 right-0 w-8 h-8 cursor-nwse-resize z-50 flex items-end justify-end p-2 opacity-80 hover:opacity-100 transition-opacity"
             onMouseDown={handleResizeStart}
@@ -2019,7 +2255,25 @@ const CanvasNodeItem: React.FC<CanvasNodeProps> = ({
             </button>
         </div>
       )}
+
     </div>
+    {imageOutputMenu &&
+      createPortal(
+        <div
+          className="fixed z-[200]"
+          style={{
+            left: Math.max(8, Math.min(imageOutputMenu.x, window.innerWidth - 268)),
+            top: Math.max(28, Math.min(imageOutputMenu.y, window.innerHeight - 320)),
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <ImageSuggestionPanel
+            onSelect={(kind, _e) => openComposerFromImageMenu(kind as CanvasImageOutKind)}
+          />
+        </div>,
+        document.body
+      )}
+    </>
   );
 };
 

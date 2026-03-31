@@ -1,5 +1,5 @@
 
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react';
 import { CanvasNode, Vec2, NodeType, Connection, GenerationConfig, NodeData, CanvasPreset, PresetInput } from '../../types/pebblingTypes';
 import { CreativeIdea } from '../../types';
 import FloatingInput from './FloatingInput';
@@ -13,6 +13,7 @@ import { editImageWithGemini, chatWithThirdPartyApi, getThirdPartyConfig, ImageE
 import * as canvasApi from '../../services/api/canvas';
 import { downloadRemoteToOutput } from '../../services/api/files';
 import { Icons } from './Icons';
+import { useTheme } from '../../contexts/ThemeContext';
 
 // === 画布用API适配器，桥接主项目的geminiService ===
 
@@ -191,6 +192,108 @@ const extractImageMetadata = async (imageUrl: string): Promise<ImageMetadata> =>
   });
 };
 
+/** 根据浮动面板的画质 + 比例计算豆包文生图 size（宽x高） */
+function computeComposerImageSize(imageQuality: string, aspectRatio: string): string {
+  const q = String(imageQuality || '2k').toLowerCase();
+  const longEdge = q === '1k' ? 1024 : q === '4k' ? 4096 : 2048;
+  const a = String(aspectRatio || 'auto');
+  if (a === 'auto') return `${longEdge}x${longEdge}`;
+  const parts = a.split(':');
+  const aw = Number(parts[0]);
+  const ah = Number(parts[1]);
+  if (!aw || !ah) return `${longEdge}x${longEdge}`;
+  if (aw >= ah) {
+    const w = longEdge;
+    const h = Math.max(256, Math.round((longEdge * ah) / aw));
+    return `${w}x${h}`;
+  }
+  const h = longEdge;
+  const w = Math.max(256, Math.round((longEdge * aw) / ah));
+  return `${w}x${h}`;
+}
+
+function videoRatioFromComposerAspect(aspect: string): string {
+  if (!aspect || aspect === 'auto') return '16:9';
+  return aspect;
+}
+
+function videoResolutionFromComposerQuality(imageQuality: string): string {
+  const q = String(imageQuality || '2k').toLowerCase();
+  if (q === '4k' || q === '2k') return '1080p';
+  return '720p';
+}
+
+/** 从 /api/ai/generate 图片响应解析 URL（支持多图、url、b64_json） */
+function extractImageUrlsFromGenerateJson(json: { data?: any }): string[] {
+  const out: string[] = [];
+  const dataArr = json?.data?.data;
+  if (Array.isArray(dataArr)) {
+    for (const item of dataArr) {
+      if (!item || typeof item !== 'object') continue;
+      const u = item.url;
+      const b64 = item.b64_json;
+      if (typeof u === 'string' && u.trim()) out.push(u.trim());
+      else if (typeof b64 === 'string' && b64.trim()) {
+        out.push(`data:image/png;base64,${b64.trim()}`);
+      }
+    }
+  }
+  if (out.length === 0) {
+    const u = json?.data?.data?.[0]?.url ?? json?.data?.data?.url ?? json?.data?.url;
+    const b64 = json?.data?.data?.[0]?.b64_json;
+    if (typeof u === 'string' && u.trim()) out.push(u.trim());
+    else if (typeof b64 === 'string' && b64.trim()) {
+      out.push(`data:image/png;base64,${b64.trim()}`);
+    }
+  }
+  return out;
+}
+
+/** 浮动面板提交视频任务后轮询方舟任务，直到拿到可播放地址（无 UI 状态副作用） */
+async function pollArkVideoTaskForPreview(taskId: string, maxAttempts = 120, intervalMs = 5000): Promise<string> {
+  const id = encodeURIComponent(String(taskId).trim());
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const resp = await fetch(`/api/ai/video-task/${id}`);
+      const json = await resp.json();
+      if (json.success && json.data) {
+        const status = String(json.data.status || '').toLowerCase();
+        if (status === 'completed' || status === 'success' || status === 'succeeded') {
+          const videoUrl = json.data.video_url || json.data.videoUrl;
+          if (videoUrl) return String(videoUrl);
+        }
+        if (status === 'failed' || status === 'failure') {
+          throw new Error(String(json.data.fail_reason || '视频生成失败'));
+        }
+      }
+    } catch (e) {
+      if (e instanceof Error && e.message && !e.message.includes('fetch')) throw e;
+      console.error('[pollArkVideoTaskForPreview]', e);
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  throw new Error('视频生成超时');
+}
+
+/** 浮动面板左上角屏幕坐标 → 锚点节点在画布上的位置（与 Sidebar 预览区对齐） */
+function panelScreenToAnchorCanvas(
+  panelX: number,
+  panelY: number,
+  containerRect: DOMRect,
+  canvasOffset: Vec2,
+  scale: number
+) {
+  const PREVIEW_HEADER = 48;
+  const PREVIEW_H = 176;
+  const anchorScreenX = panelX - 8;
+  const anchorScreenY = panelY + PREVIEW_HEADER + PREVIEW_H / 2;
+  const w = 20;
+  const h = 20;
+  const canvasX = (anchorScreenX - containerRect.left - canvasOffset.x) / scale - w / 2;
+  const canvasY = (anchorScreenY - containerRect.top - canvasOffset.y) / scale - h / 2;
+  return { x: canvasX, y: canvasY };
+}
+
 // === 画布组件开始 ===
 
 interface PebblingCanvasProps {
@@ -210,6 +313,8 @@ const PebblingCanvas: React.FC<PebblingCanvasProps> = ({
   pendingImageToAdd,
   onPendingImageAdded
 }) => {
+  const { themeName } = useTheme();
+
   // --- 画布管理状态 ---
   const [currentCanvasId, setCurrentCanvasId] = useState<string | null>(null);
   const [canvasList, setCanvasList] = useState<canvasApi.CanvasListItem[]>([]);
@@ -252,7 +357,22 @@ const PebblingCanvas: React.FC<PebblingCanvasProps> = ({
   // Node Selection & Dragging
   const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set<string>());
   const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
-  
+
+  /** 两端必须都落在现存节点上；否则从状态中删除（渲染层原已跳过，避免脏数据残留） */
+  useEffect(() => {
+    const idSet = new Set(nodes.map((n) => n.id));
+    setConnections((prev) => {
+      const next = prev.filter((c) => idSet.has(c.fromNode) && idSet.has(c.toNode));
+      return next.length === prev.length ? prev : next;
+    });
+    setSelectedConnectionId((sel) => {
+      if (!sel) return sel;
+      const c = connectionsRef.current.find((x) => x.id === sel);
+      if (!c || !idSet.has(c.fromNode) || !idSet.has(c.toNode)) return null;
+      return sel;
+    });
+  }, [nodes]);
+
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
   const [isDragOperation, setIsDragOperation] = useState(false); // Tracks if actual movement occurred
   
@@ -799,6 +919,173 @@ const PebblingCanvas: React.FC<PebblingCanvasProps> = ({
   // --- Utils ---
   const uuid = () => Math.random().toString(36).substr(2, 9);
 
+  const canvasOffsetRef = useRef<Vec2>(canvasOffset);
+  const scaleRef = useRef(scale);
+  useEffect(() => {
+    canvasOffsetRef.current = canvasOffset;
+  }, [canvasOffset]);
+  useEffect(() => {
+    scaleRef.current = scale;
+  }, [scale]);
+
+  /**
+   * 图片节点「+」菜单 / 侧栏 Image 悬停入口 → 创建 composer-anchor 并通知 Sidebar 打开可拖拽浮动输入框
+   */
+  useEffect(() => {
+    const onOpenComposer = (e: Event) => {
+      const d = (e as CustomEvent).detail || {};
+      const sourceNodeId = d.sourceNodeId as string | undefined;
+      if (!sourceNodeId) return;
+      const source = nodesRef.current.find((n) => n.id === sourceNodeId);
+      if (!source) return;
+
+      const kind = d.kind;
+      const px = Number(d.x) || 0;
+      const py = Number(d.y) || 0;
+      const panelW = 560;
+      const nextX = Math.max(80, Math.min(window.innerWidth - panelW - 40, px + 16));
+      const nextY = Math.max(24, Math.min(window.innerHeight - 220, py - 60));
+
+      const container = containerRef.current;
+      if (!container) return;
+      const cr = container.getBoundingClientRect();
+      const anchorPos = panelScreenToAnchorCanvas(nextX, nextY, cr, canvasOffsetRef.current, scaleRef.current);
+
+      const anchorId = uuid();
+      const anchorNode: CanvasNode = {
+        id: anchorId,
+        type: 'composer-anchor',
+        content: '',
+        x: anchorPos.x,
+        y: anchorPos.y,
+        width: 20,
+        height: 20,
+        data: {},
+        status: 'idle',
+      };
+      setNodes((prev) => {
+        const next = [...prev, anchorNode];
+        nodesRef.current = next;
+        return next;
+      });
+      setConnections((prev) => {
+        const next = [...prev, { id: uuid(), fromNode: sourceNodeId, toNode: anchorId }];
+        connectionsRef.current = next;
+        return next;
+      });
+      setHasUnsavedChanges(true);
+
+      window.dispatchEvent(
+        new CustomEvent('pebbling-floating-composer-open', {
+          detail: {
+            kind,
+            x: nextX,
+            y: nextY,
+            sourceNodeId,
+            anchorId,
+            sourceImageUrl: source.content,
+          },
+        })
+      );
+    };
+
+    const onOpenWithAnchor = (e: Event) => {
+      const d = (e as CustomEvent).detail || {};
+      const kind = d.kind;
+      if (!kind) return;
+      const prevAid = d.previousAnchorId as string | undefined;
+      if (prevAid) {
+        setNodes((prev) => {
+          const next = prev.filter((n) => n.id !== prevAid);
+          nodesRef.current = next;
+          return next;
+        });
+        setConnections((prev) => {
+          const next = prev.filter((c) => c.fromNode !== prevAid && c.toNode !== prevAid);
+          connectionsRef.current = next;
+          return next;
+        });
+        setHasUnsavedChanges(true);
+      }
+      const px = Number(d.clientX) || 0;
+      const py = Number(d.clientY) || 0;
+      const panelW = 560;
+      const nextX = Math.max(80, Math.min(window.innerWidth - panelW - 40, px + 16));
+      const nextY = Math.max(24, Math.min(window.innerHeight - 220, py - 60));
+      const container = containerRef.current;
+      if (!container) return;
+      const cr = container.getBoundingClientRect();
+      const anchorPos = panelScreenToAnchorCanvas(nextX, nextY, cr, canvasOffsetRef.current, scaleRef.current);
+      const anchorId = uuid();
+      const anchorNode: CanvasNode = {
+        id: anchorId,
+        type: 'composer-anchor',
+        content: '',
+        x: anchorPos.x,
+        y: anchorPos.y,
+        width: 20,
+        height: 20,
+        data: {},
+        status: 'idle',
+      };
+      setNodes((prev) => {
+        const next = [...prev, anchorNode];
+        nodesRef.current = next;
+        return next;
+      });
+      setHasUnsavedChanges(true);
+      window.dispatchEvent(
+        new CustomEvent('pebbling-floating-composer-open', {
+          detail: { kind, x: nextX, y: nextY, anchorId },
+        })
+      );
+    };
+
+    const onAnchorSync = (e: Event) => {
+      const d = (e as CustomEvent).detail || {};
+      const anchorId = d.anchorId as string | undefined;
+      const panelX = Number(d.panelX);
+      const panelY = Number(d.panelY);
+      if (!anchorId || Number.isNaN(panelX) || Number.isNaN(panelY)) return;
+      const container = containerRef.current;
+      if (!container) return;
+      const cr = container.getBoundingClientRect();
+      const pos = panelScreenToAnchorCanvas(panelX, panelY, cr, canvasOffsetRef.current, scaleRef.current);
+      setNodes((prev) => {
+        const next = prev.map((n) => (n.id === anchorId ? { ...n, x: pos.x, y: pos.y } : n));
+        nodesRef.current = next;
+        return next;
+      });
+    };
+
+    const onDismiss = (e: Event) => {
+      const aid = (e as CustomEvent).detail?.anchorId as string | undefined;
+      if (!aid) return;
+      setNodes((prev) => {
+        const next = prev.filter((n) => n.id !== aid);
+        nodesRef.current = next;
+        return next;
+      });
+      setConnections((prev) => {
+        const next = prev.filter((c) => c.fromNode !== aid && c.toNode !== aid);
+        connectionsRef.current = next;
+        return next;
+      });
+      setHasUnsavedChanges(true);
+    };
+
+    window.addEventListener('pebbling-open-composer', onOpenComposer);
+    window.addEventListener('pebbling-composer-open-with-anchor', onOpenWithAnchor);
+    window.addEventListener('pebbling-composer-anchor-sync', onAnchorSync);
+    window.addEventListener('pebbling-composer-dismiss', onDismiss);
+    return () => {
+      window.removeEventListener('pebbling-open-composer', onOpenComposer);
+      window.removeEventListener('pebbling-composer-open-with-anchor', onOpenWithAnchor);
+      window.removeEventListener('pebbling-composer-anchor-sync', onAnchorSync);
+      window.removeEventListener('pebbling-composer-dismiss', onDismiss);
+    };
+  }, []);
+
   // Helper for Client-Side Resize
   const resizeImageClient = (base64Str: string, mode: 'longest' | 'shortest' | 'width' | 'height' | 'exact', widthVal: number, heightVal: number): Promise<string> => {
       return new Promise((resolve, reject) => {
@@ -1003,6 +1290,7 @@ const PebblingCanvas: React.FC<PebblingCanvasProps> = ({
       
       // 监听自定义的 sidebar-drag-end 事件（鼠标模拟拖拽）
       const handleSidebarDragEnd = (e: Event) => {
+          if (!isActive) return;
           const detail = (e as CustomEvent).detail;
           console.log('[Canvas] sidebar-drag-end received:', detail);
           
@@ -1018,7 +1306,7 @@ const PebblingCanvas: React.FC<PebblingCanvasProps> = ({
               addNode(detail.type, '', { x, y });
           }
       };
-      
+
       window.addEventListener('keydown', handleKeyDown);
       window.addEventListener('keyup', handleKeyUp);
       window.addEventListener('sidebar-drag-end', handleSidebarDragEnd);
@@ -1097,6 +1385,7 @@ const PebblingCanvas: React.FC<PebblingCanvasProps> = ({
           }
       }
       if (type === 'video') { width = 400; height = 225; }
+      if (type === 'composer-anchor') { width = 20; height = 20; }
       if (type === 'relay') { width = 40; height = 40; }
       if (['edit', 'remove-bg', 'upscale', 'llm', 'resize'].includes(type)) { width = 280; height = 250; }
       if (type === 'llm') { width = 320; height = 300; }
@@ -1215,14 +1504,6 @@ const PebblingCanvas: React.FC<PebblingCanvasProps> = ({
     pendingImageRef.current = null;
   }, [onPendingImageAdded]);
 
-  const updateNode = (id: string, updates: Partial<CanvasNode>) => {
-      // 先同步更新 ref，确保级联执行时能立即获取最新状态
-      const newNodes = nodesRef.current.map(n => n.id === id ? { ...n, ...updates } : n);
-      nodesRef.current = newNodes;
-      // 再更新 React 状态
-      setNodes(newNodes);
-  };
-
   // --- EXECUTION LOGIC ---
 
   // Helper: 检查是否是有效图片
@@ -1236,6 +1517,66 @@ const PebblingCanvas: React.FC<PebblingCanvasProps> = ({
           content.startsWith('/files/') ||
           content.startsWith('/api/')
       );
+  };
+
+  /** 根据指向 composer-anchor 的连线，把上游节点上的图片同步到浮动生成面板（换背景 / 扩图 / 首帧视频等依赖参考图） */
+  const syncComposerAnchorForAnchorId = useCallback(
+    (anchorId: string, conns?: Connection[], nodeList?: CanvasNode[]) => {
+      const cList = conns ?? connectionsRef.current;
+      const nList = nodeList ?? nodesRef.current;
+      const incoming = cList.filter((c) => c.toNode === anchorId);
+      const urls: string[] = [];
+      const nodeIds: string[] = [];
+      for (const c of incoming) {
+        const src = nList.find((n) => n.id === c.fromNode);
+        if (!src) continue;
+        let url: string | null = null;
+        if (isValidImage(src.content)) url = src.content!;
+        else if (src.data?.output && isValidImage(String(src.data.output))) {
+          url = String(src.data.output);
+        }
+        if (url) {
+          urls.push(url);
+          nodeIds.push(src.id);
+        }
+      }
+      window.dispatchEvent(
+        new CustomEvent('pebbling-composer-sync-source', {
+          detail: {
+            anchorId,
+            sourceImageUrls: urls,
+            sourceNodeIds: nodeIds,
+            sourceImageUrl: urls[0],
+          },
+        })
+      );
+    },
+    []
+  );
+
+  /** 必须用当次 render 的 connections/nodes：connectionsRef 在 useEffect 里才更新，会晚于 useLayoutEffect */
+  useLayoutEffect(() => {
+    const anchorIds = nodes.filter((n) => n.type === 'composer-anchor').map((n) => n.id);
+    for (const aid of anchorIds) {
+      syncComposerAnchorForAnchorId(aid, connections, nodes);
+    }
+  }, [connections, nodes, syncComposerAnchorForAnchorId]);
+
+  const updateNode = (id: string, updates: Partial<CanvasNode>) => {
+      // 先同步更新 ref，确保级联执行时能立即获取最新状态
+      const newNodes = nodesRef.current.map(n => n.id === id ? { ...n, ...updates } : n);
+      nodesRef.current = newNodes;
+      // 再更新 React 状态
+      setNodes(newNodes);
+      const anchorTargets = new Set<string>();
+      for (const c of connectionsRef.current) {
+        if (c.fromNode !== id) continue;
+        const t = newNodes.find((n) => n.id === c.toNode);
+        if (t?.type === 'composer-anchor') anchorTargets.add(c.toNode);
+      }
+      anchorTargets.forEach((aid) => {
+        queueMicrotask(() => syncComposerAnchorForAnchorId(aid));
+      });
   };
   
   // Helper: 下载视频并保存（提取为公共函数）
@@ -3335,6 +3676,275 @@ const PebblingCanvas: React.FC<PebblingCanvasProps> = ({
       }
   };
 
+  // 监听可拖拽输入面板提交（发送按钮 / Shift+Enter）
+  useEffect(() => {
+    const onComposerSubmit = async (e: Event) => {
+      const detail = (e as CustomEvent).detail || {};
+      const kind = String(detail.kind || 'native-image');
+
+      /** 仅来自画布连线（sourceImageUrl(s)），不用预览图兜底，换背景/扩图/首帧视频必须走连线 */
+      const wiredFromUrls = Array.isArray(detail.sourceImageUrls)
+        ? (detail.sourceImageUrls as unknown[]).map((u) => String(u || '').trim()).filter(Boolean)
+        : [];
+      const wiredOne = String(detail.sourceImageUrl || '').trim();
+      const wiredRefs =
+        wiredFromUrls.length > 0 ? [...new Set(wiredFromUrls)] : wiredOne ? [wiredOne] : [];
+
+      const mustUseWiredImage =
+        kind === 'remove-bg' ||
+        kind === 'expand-image' ||
+        kind === 'enhance-details' ||
+        kind === 'native-image' ||
+        kind === 'native-video';
+      if (mustUseWiredImage && wiredRefs.length === 0) {
+        alert(
+          '请先将画布上的图片节点连线到浮动面板左侧锚点，再生成。图生图、图生视频、换背景、图片扩展、首帧图生视频均需依赖连线参考图。'
+        );
+        return;
+      }
+
+      let prompt = String(detail.prompt || '').trim();
+      if (!prompt) {
+        if (kind === 'remove-bg') prompt = '替换背景为描述中的场景，保留清晰主体与边缘自然';
+        else if (kind === 'expand-image') prompt = '自然扩展画面边缘，保持风格与透视一致';
+        else if (kind === 'enhance-details') prompt = '基于首帧生成连贯、自然的动态与镜头运动';
+        else if (kind === 'native-image') prompt = '在参考图基础上优化画面，保持主体与整体风格一致';
+        else if (kind === 'native-video') prompt = '按参考图与镜头描述生成动态视频';
+        else return;
+      }
+
+      const base = String(detail.base || 'doubao'); // doubao | comfyui
+      const generationCount = Math.max(1, Number(detail.generationCount || 1));
+      const legacyRes = String(detail.resolutionType || '');
+      const imageQuality = String(
+        detail.imageQuality || (legacyRes === '2k' ? '2k' : '1k')
+      );
+      const aspectRatio = String(detail.aspectRatio || 'auto');
+      const adv = detail.advanced || {};
+      const style = detail.style as { id?: string; name?: string; category?: string } | undefined;
+
+      /** 将「风格资产」并入最终提示词，供文生图/图生视频模型参考 */
+      const mergeStyleIntoPrompt = (userPrompt: string): string => {
+        const name = String(style?.name || '').trim();
+        if (!name) return userPrompt;
+        const cat = String(style?.category || '').trim();
+        const tag = cat ? `「${name}」（${cat}）` : `「${name}」`;
+        return `【画面风格参考：${tag}】请严格在该视觉风格下生成，风格与氛围需与参考一致。\n用户描述：${userPrompt}`;
+      };
+
+      let finalPrompt = mergeStyleIntoPrompt(prompt);
+      if (kind === 'expand-image') {
+        finalPrompt = `【图片扩展】在保持主体、风格一致的前提下扩展画幅并补全边缘。\n${finalPrompt}`;
+      } else if (kind === 'remove-bg') {
+        finalPrompt = `【换背景】保留主体，按描述替换或生成背景。\n${finalPrompt}`;
+      } else if (kind === 'enhance-details') {
+        finalPrompt = `【首帧图生视频】以上传图片为第一帧参考，按描述生成连贯动态视频。\n${finalPrompt}`;
+      } else if (kind === 'native-image' && wiredRefs.length > 0) {
+        finalPrompt = `【图生图】在参考图内容与构图基础上，按描述生成新图。\n${finalPrompt}`;
+      } else if (kind === 'native-video' && wiredRefs.length > 0) {
+        finalPrompt = `【图生视频】以参考图为基准，按描述生成动态视频。\n${finalPrompt}`;
+      }
+
+      const isVideo = kind === 'native-video' || kind === 'enhance-details';
+      const task = isVideo ? 'video' : 'image';
+
+      if (base === 'comfyui' && task === 'video') {
+        alert('当前浮动面板在「开源 ComfyUI」下仅支持文生图；请改用「闭源豆包」生成视频，或从侧栏使用视频相关节点。');
+        return;
+      }
+
+      // 统一后端入口：/api/ai/generate
+      const body: any = {
+        base,
+        task,
+        prompt: finalPrompt,
+      };
+
+      if (task === 'image') {
+        body.size = computeComposerImageSize(imageQuality, aspectRatio);
+        body.guidance_scale = typeof adv.cfgScale === 'number' ? adv.cfgScale : 3;
+        body.watermark = true;
+        if (
+          kind === 'remove-bg' ||
+          kind === 'expand-image' ||
+          kind === 'native-image'
+        ) {
+          body.image = wiredRefs.length === 1 ? wiredRefs[0] : wiredRefs;
+        }
+      } else {
+        const vo = (detail.videoOptions || {}) as {
+          duration?: number;
+          cameraFixed?: boolean;
+          watermark?: boolean;
+        };
+        body.options = {
+          ratio: videoRatioFromComposerAspect(aspectRatio),
+          resolution: videoResolutionFromComposerQuality(imageQuality),
+          duration: typeof vo.duration === 'number' ? vo.duration : 5,
+          cameraFixed: typeof vo.cameraFixed === 'boolean' ? vo.cameraFixed : false,
+          watermark: typeof vo.watermark === 'boolean' ? vo.watermark : true,
+        };
+        if (wiredRefs.length > 0) {
+          body.referenceMediaUrls = wiredRefs;
+        }
+      }
+
+      const emitComposerProgress = (payload: {
+        active: boolean;
+        message?: string;
+        mode?: 'image' | 'video';
+        imageIndex?: number;
+        imageTotal?: number;
+        percent?: number;
+      }) => {
+        window.dispatchEvent(new CustomEvent('pebbling-composer-progress', { detail: payload }));
+      };
+
+      setIsGenerating(true);
+      emitComposerProgress({
+        active: true,
+        mode: task === 'video' ? 'video' : 'image',
+        message:
+          task === 'video'
+            ? `准备生成视频（共 ${generationCount} 段）…`
+            : `准备生成图片（共 ${generationCount} 张）…`,
+        imageTotal: task === 'image' ? generationCount : undefined,
+        percent: 0,
+      });
+      const accImages: string[] = [];
+      const accVideos: string[] = [];
+      try {
+        for (let i = 0; i < generationCount; i++) {
+          if (task === 'image') {
+            emitComposerProgress({
+              active: true,
+              mode: 'image',
+              message: `正在生成第 ${i + 1} / ${generationCount} 张…`,
+              imageIndex: i + 1,
+              imageTotal: generationCount,
+              percent: Math.round((i / generationCount) * 100),
+            });
+          } else {
+            emitComposerProgress({
+              active: true,
+              mode: 'video',
+              message: `视频 ${i + 1} / ${generationCount}：已提交，等待渲染（约 1–5 分钟）…`,
+            });
+          }
+          let resp: Response;
+          try {
+            resp = await fetch('/api/ai/generate', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            });
+          } catch (netErr) {
+            const m = netErr instanceof Error ? netErr.message : String(netErr);
+            alert(
+              `无法连接后端（请确认已启动 Node 服务，开发环境为 http://127.0.0.1:8765）：${m}`
+            );
+            console.error('[ComposerSubmit] fetch failed:', netErr);
+            break;
+          }
+
+          const text = await resp.text();
+          let json: any;
+          try {
+            json = text ? JSON.parse(text) : {};
+          } catch {
+            alert(
+              `服务端返回非 JSON（HTTP ${resp.status}）。若使用 ComfyUI，生成可能较慢，请确认 Vite 代理超时已加大：${text.slice(0, 400)}`
+            );
+            break;
+          }
+
+          if (!resp.ok || !json?.success) {
+            const msg = String(json?.error || text || '生成失败');
+            alert(`生成失败：${msg}`);
+            break;
+          }
+
+          // 豆包 / ComfyUI 图片：仅回填浮动面板「生成结果」预览区；多张时累积 urls 供左右切换
+          if (task === 'image') {
+            const urls = extractImageUrlsFromGenerateJson(json);
+            if (urls.length > 0) {
+              accImages.push(...urls);
+              emitComposerProgress({
+                active: true,
+                mode: 'image',
+                message: `已完成 ${accImages.length} / ${generationCount} 张`,
+                imageIndex: i + 1,
+                imageTotal: generationCount,
+                percent: Math.round(((i + 1) / generationCount) * 100),
+              });
+              window.dispatchEvent(
+                new CustomEvent('pebbling-composer-preview', {
+                  detail: {
+                    url: accImages[0],
+                    urls: [...accImages],
+                    isVideo: false,
+                  },
+                })
+              );
+            } else {
+              alert(
+                '服务端返回成功，但未解析到图片地址。若使用 ComfyUI，请确认 data/comfyui_default_workflow.json 存在且含 Save Image 节点，本机 ComfyUI 已启动。'
+              );
+            }
+          } else {
+            const taskId = json.data?.id || json.data?.task_id || json.data?.data?.id;
+            if (taskId) {
+              try {
+                emitComposerProgress({
+                  active: true,
+                  mode: 'video',
+                  message: `视频 ${i + 1} / ${generationCount}：排队与渲染中，请稍候…`,
+                });
+                const vUrl = await pollArkVideoTaskForPreview(String(taskId));
+                accVideos.push(vUrl);
+                emitComposerProgress({
+                  active: true,
+                  mode: 'video',
+                  message: `已完成 ${accVideos.length} / ${generationCount} 段视频`,
+                });
+                window.dispatchEvent(
+                  new CustomEvent('pebbling-composer-preview', {
+                    detail: {
+                      url: accVideos[0],
+                      urls: accVideos.length > 1 ? [...accVideos] : undefined,
+                      isVideo: true,
+                    },
+                  })
+                );
+              } catch (vErr) {
+                alert(`视频生成失败: ${vErr instanceof Error ? vErr.message : String(vErr)}`);
+                break;
+              }
+            }
+          }
+        }
+      } finally {
+        emitComposerProgress({ active: false });
+        setIsGenerating(false);
+      }
+    };
+
+    window.addEventListener('pebbling-composer-submit', onComposerSubmit);
+    return () => window.removeEventListener('pebbling-composer-submit', onComposerSubmit);
+  }, [handleGenerate]);
+
+  // 监听可拖拽输入面板上传图片（左上角 + 号）
+  useEffect(() => {
+    const onUploadImage = (e: Event) => {
+      const detail = (e as CustomEvent).detail || {};
+      const base64 = String(detail.base64 || '');
+      if (!base64.startsWith('data:image')) return;
+      addNode('image', base64);
+    };
+    window.addEventListener('pebbling-composer-upload-image', onUploadImage);
+    return () => window.removeEventListener('pebbling-composer-upload-image', onUploadImage);
+  }, []);
+
   // --- CONTEXT MENU ---
   const handleContextMenu = (e: React.MouseEvent) => {
       e.preventDefault();
@@ -3362,7 +3972,8 @@ const PebblingCanvas: React.FC<PebblingCanvasProps> = ({
 
   return (
     <div 
-      className="w-full h-full bg-[#0a0a0f] text-white overflow-hidden relative" 
+      className={`w-full h-full min-h-0 flex flex-col overflow-hidden relative ${themeName !== 'light' ? 'text-white' : 'text-black'}`}
+      style={{ backgroundColor: themeName !== 'light' ? '#000' : '#fff' }}
       onContextMenu={handleContextMenu}
     >
 
@@ -3474,6 +4085,7 @@ const PebblingCanvas: React.FC<PebblingCanvasProps> = ({
               // 不创建Image节点，不创建连接
             }
           }}
+          composerGenerating={isGenerating}
       />
       
       {/* 画布名称标识 - 独立模块 */}
@@ -3485,7 +4097,7 @@ const PebblingCanvas: React.FC<PebblingCanvasProps> = ({
       
       <div
         ref={containerRef}
-        className={`w-full h-full relative ${isSpacePressed ? 'cursor-grab' : 'cursor-default'} ${isDraggingCanvas ? '!cursor-grabbing' : ''}`}
+        className={`flex-1 min-h-0 w-full relative ${isSpacePressed ? 'cursor-grab' : 'cursor-default'} ${isDraggingCanvas ? '!cursor-grabbing' : ''}`}
         onMouseDown={onMouseDownCanvas}
         onMouseMove={onMouseMove}
         onMouseUp={onMouseUp}

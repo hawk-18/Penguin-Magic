@@ -2,9 +2,10 @@
    PenguinMagic UI - 现代暗色精致样式系统
    =========================================== */
 
-/* 基础重置和全局样式 */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
 
+/* 基础重置和全局样式 */
 :root {
   /* 核心颜色 - 冰雪极光主题 */
   --color-background: #0a0a0a;
@@ -56,6 +57,11 @@ body {
   color: var(--color-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* 避免不同页面滚动条出现/消失导致居中元素横向跳动 */
+html {
+  scrollbar-gutter: stable;
 }
 
 /* 滚动条样式 */
@@ -270,7 +276,6 @@ body {
   border-radius: 10px;
   backdrop-filter: blur(20px);
 }
-
 .liquid-tab {
   position: relative;
   padding: 6px 14px;
@@ -412,6 +417,27 @@ body {
 /* 日间模式文字 */
 .theme-light .text-white {
   color: #0f172a !important;
+}
+
+/* ========= 画布可拖拽输入面板：强制白字（无视亮色主题覆盖） ========= */
+.theme-light .force-white-text,
+.theme-light .force-white-text * {
+  color: #ffffff !important;
+}
+
+.theme-light .force-white-text ::placeholder {
+  color: #ffffff !important;
+  opacity: 0.9;
+}
+
+/* 浮动生成面板「风格」按钮：上 + 下「风格」、浅灰字（不受 force-white-text 子元素全白覆盖） */
+.theme-light .force-white-text .composer-style-btn,
+.theme-light .force-white-text .composer-style-btn * {
+  color: #a3a3a8 !important;
+}
+.theme-light .force-white-text .composer-style-btn:hover,
+.theme-light .force-white-text .composer-style-btn:hover * {
+  color: #b8b8bd !important;
 }
 
 .theme-light .text-gray-300 {

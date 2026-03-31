@@ -1,0 +1,10 @@
+{
+  "theme": "dark",
+  "thirdPartyConfig": {
+    "enabled": true,
+    "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+    "apiKey": "1733c03b-f216-4c82-b58b-5a8bff38e671",
+    "chatModel": "doubao-1-5-lite-32k-250115",
+    "videoModel": "doubao-seedance-1-0-lite-t2v-250428"
+  }
+}

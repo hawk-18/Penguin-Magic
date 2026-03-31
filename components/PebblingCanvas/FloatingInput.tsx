@@ -2,13 +2,31 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Icons } from './Icons';
 import { NodeType, GenerationConfig } from '../../types/pebblingTypes';
 
+const PEBBLING_BOTTOM_PROMPT_KEY = 'pebbling-floating-input-prompt';
+
+function readBottomPromptDraft(): string {
+  try {
+    return sessionStorage.getItem(PEBBLING_BOTTOM_PROMPT_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function persistBottomPromptDraft(text: string) {
+  try {
+    sessionStorage.setItem(PEBBLING_BOTTOM_PROMPT_KEY, text);
+  } catch {
+    /* ignore */
+  }
+}
+
 interface FloatingInputProps {
   onGenerate: (type: NodeType, prompt: string, config?: GenerationConfig, files?: File[]) => void;
   isGenerating: boolean;
 }
 
 const FloatingInput: React.FC<FloatingInputProps> = ({ onGenerate, isGenerating }) => {
-  const [prompt, setPrompt] = useState('');
+  const [prompt, setPrompt] = useState(readBottomPromptDraft);
   const [isExpanded, setIsExpanded] = useState(false);
   
   // Settings
@@ -17,6 +35,10 @@ const FloatingInput: React.FC<FloatingInputProps> = ({ onGenerate, isGenerating 
   const [files, setFiles] = useState<File[]>([]);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    persistBottomPromptDraft(prompt);
+  }, [prompt]);
 
   // Auto-switch to AUTO aspect ratio when files are added (Img2Img default)
   useEffect(() => {
@@ -42,9 +64,7 @@ const FloatingInput: React.FC<FloatingInputProps> = ({ onGenerate, isGenerating 
     const type = files.length > 0 ? 'edit' : 'image';
     
     onGenerate(type, prompt, { aspectRatio, resolution }, files);
-    
-    // Reset
-    setPrompt('');
+
     setFiles([]);
     setIsExpanded(false);
   };
@@ -58,7 +78,7 @@ const FloatingInput: React.FC<FloatingInputProps> = ({ onGenerate, isGenerating 
   const aspectRatios = ['AUTO', '1:1', '16:9', '9:16', '4:3', '3:4'];
 
   return (
-    <div className={`fixed bottom-8 left-1/2 -translate-x-1/2 z-40 transition-all duration-300 ${isExpanded ? 'w-[540px]' : 'w-[500px]'}`}>
+    <div className={`fixed bottom-8 left-1/2 -translate-x-1/2 z-[130] transition-all duration-300 ${isExpanded ? 'w-[540px]' : 'w-[500px]'}`}>
       
       {/* Attached Files Pills */}
       {files.length > 0 && (

@@ -202,8 +202,9 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
     root.style.setProperty('--color-glow', colors.glow);
     root.style.setProperty('--color-shadow', colors.shadow);
     
-    // 设置主题类名
-    root.className = `theme-${themeName}`;
+    // 主题类名：增删而非覆盖 className，避免清掉 html 上其它类
+    root.classList.remove('theme-dark', 'theme-light');
+    root.classList.add(`theme-${themeName}`);
   }, [theme, themeName]);
 
   const value: ThemeContextValue = {

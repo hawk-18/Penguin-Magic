@@ -1,7 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { ThirdPartyApiConfig, getApiConfig, saveApiConfig, checkBalance } from '../../services/pebblingGeminiService';
+import { getAiConfig } from '../../services/api/ai';
 import { SoraConfig, getSoraConfig, saveSoraConfig } from '../../services/soraService';
 import { Icons } from './Icons';
+
+interface ComfyuiConfig {
+  enabled: boolean;
+  baseUrl: string;
+}
 
 interface ApiSettingsProps {
   isOpen: boolean;
@@ -9,7 +15,7 @@ interface ApiSettingsProps {
 }
 
 const ApiSettings: React.FC<ApiSettingsProps> = ({ isOpen, onClose }) => {
-  const [activeTab, setActiveTab] = useState<'gemini' | 'sora'>('gemini');
+  const [activeTab, setActiveTab] = useState<'gemini' | 'sora' | 'comfyui'>('gemini');
   
   const [config, setConfig] = useState<ThirdPartyApiConfig>({
     enabled: true,
@@ -23,28 +29,65 @@ const ApiSettings: React.FC<ApiSettingsProps> = ({ isOpen, onClose }) => {
     apiKey: '',
     baseUrl: 'https://api.openai.com'
   });
+
+  const [comfyuiConfig, setComfyuiConfig] = useState<ComfyuiConfig>({
+    enabled: true,
+    baseUrl: 'http://127.0.0.1:8188'
+  });
   
   const [showApiKey, setShowApiKey] = useState(false);
   const [showSoraKey, setShowSoraKey] = useState(false);
   const [balance, setBalance] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle');
+  const [comfyuiStatus, setComfyuiStatus] = useState<string>('');
 
   useEffect(() => {
-    if (isOpen) {
-      const savedConfig = getApiConfig();
-      setConfig(savedConfig);
+    if (!isOpen) return;
+    void (async () => {
+      try {
+        const r = await getAiConfig();
+        if (r.success && r.data) {
+          setConfig({ ...getApiConfig(), ...(r.data as Partial<ThirdPartyApiConfig>) });
+        } else {
+          setConfig(getApiConfig());
+        }
+      } catch {
+        setConfig(getApiConfig());
+      }
       const savedSoraConfig = getSoraConfig();
       setSoraConfig(savedSoraConfig);
+      
+      // 加载 ComfyUI 配置
+      try {
+        const resp = await fetch('/api/ai/comfyui/config');
+        const json = await resp.json();
+        if (json.success && json.data) {
+          setComfyuiConfig({
+            enabled: json.data.enabled !== false,
+            baseUrl: json.data.baseUrl || 'http://127.0.0.1:8188'
+          });
+        }
+      } catch {
+        // 使用默认配置
+      }
+      
       setSaveStatus('idle');
       setBalance(null);
-    }
+      setComfyuiStatus('');
+    })();
   }, [isOpen]);
 
-  const handleSave = () => {
+  const handleSave = async () => {
     try {
       saveApiConfig(config);
       saveSoraConfig(soraConfig);
+      // 保存 ComfyUI 配置
+      await fetch('/api/ai/comfyui/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(comfyuiConfig)
+      });
       setSaveStatus('saved');
       setTimeout(() => setSaveStatus('idle'), 2000);
     } catch (e) {
@@ -77,6 +120,35 @@ const ApiSettings: React.FC<ApiSettingsProps> = ({ isOpen, onClose }) => {
       }
     } catch (e) {
       setBalance('连接失败: 网络错误');
+    }
+    setIsLoading(false);
+  };
+
+  const handleTestComfyui = async () => {
+    setIsLoading(true);
+    setComfyuiStatus('');
+    try {
+      // 先保存配置
+      await fetch('/api/ai/comfyui/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(comfyuiConfig)
+      });
+      
+      const resp = await fetch('/api/ai/comfyui/test', { method: 'POST' });
+      const json = await resp.json();
+      
+      if (json.success && json.connected) {
+        if (json.workflowExists) {
+          setComfyuiStatus('✓ 连接成功，工作流已就绪');
+        } else {
+          setComfyuiStatus('✓ 连接成功，但工作流文件不存在');
+        }
+      } else {
+        setComfyuiStatus(`✗ 连接失败: ${json.error || '未知错误'}`);
+      }
+    } catch (e) {
+      setComfyuiStatus(`✗ 测试失败: ${e instanceof Error ? e.message : '网络错误'}`);
     }
     setIsLoading(false);
   };
@@ -114,6 +186,12 @@ const ApiSettings: React.FC<ApiSettingsProps> = ({ isOpen, onClose }) => {
             className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${activeTab === 'sora' ? 'text-purple-400 border-b-2 border-purple-400' : 'text-white/50 hover:text-white/70'}`}
           >
             Sora 视频
+          </button>
+          <button 
+            onClick={() => setActiveTab('comfyui')}
+            className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${activeTab === 'comfyui' ? 'text-green-400 border-b-2 border-green-400' : 'text-white/50 hover:text-white/70'}`}
+          >
+            ComfyUI
           </button>
         </div>
 
@@ -182,7 +260,7 @@ const ApiSettings: React.FC<ApiSettingsProps> = ({ isOpen, onClose }) => {
                 </button>
               </div>
             </>
-          ) : (
+          ) : activeTab === 'sora' ? (
             /* Sora 配置 */
             <>
               <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl px-4 py-3 mb-2">
@@ -213,6 +291,54 @@ const ApiSettings: React.FC<ApiSettingsProps> = ({ isOpen, onClose }) => {
                   className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-white/30 focus:outline-none focus:border-purple-500/50"
                 />
                 <p className="mt-1 text-xs text-white/40">支持第三方代理地址，如 T8star 等</p>
+              </div>
+            </>
+          ) : (
+            /* ComfyUI 配置 */
+            <>
+              <div className="bg-green-500/10 border border-green-500/30 rounded-xl px-4 py-3 mb-2">
+                <p className="text-xs text-green-300">ℹ️ ComfyUI 是开源的图像生成工具，需要本地运行 ComfyUI 服务</p>
+              </div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-sm text-white/70">启用 ComfyUI</label>
+                <button
+                  onClick={() => setComfyuiConfig({ ...comfyuiConfig, enabled: !comfyuiConfig.enabled })}
+                  className={`w-12 h-6 rounded-full transition-colors ${comfyuiConfig.enabled ? 'bg-green-500' : 'bg-white/20'}`}
+                >
+                  <div className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${comfyuiConfig.enabled ? 'translate-x-6' : 'translate-x-0.5'}`} />
+                </button>
+              </div>
+              <div>
+                <label className="block text-sm text-white/70 mb-2">ComfyUI 地址</label>
+                <input
+                  type="text"
+                  value={comfyuiConfig.baseUrl}
+                  onChange={(e) => setComfyuiConfig({ ...comfyuiConfig, baseUrl: e.target.value })}
+                  placeholder="http://127.0.0.1:8188"
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-white/30 focus:outline-none focus:border-green-500/50"
+                />
+                <p className="mt-1 text-xs text-white/40">默认地址为 http://127.0.0.1:8188</p>
+              </div>
+              {comfyuiStatus && (
+                <div className={`rounded-xl px-4 py-3 ${comfyuiStatus.includes('✓') ? 'bg-green-500/10 border border-green-500/30' : 'bg-red-500/10 border border-red-500/30'}`}>
+                  <p className={`text-sm ${comfyuiStatus.includes('✓') ? 'text-green-300' : 'text-red-300'}`}>{comfyuiStatus}</p>
+                </div>
+              )}
+              <button 
+                onClick={handleTestComfyui} 
+                disabled={isLoading || !comfyuiConfig.baseUrl} 
+                className="w-full px-4 py-2.5 rounded-xl bg-green-500/20 border border-green-500/30 text-green-300 hover:bg-green-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+              >
+                {isLoading ? '测试中...' : '测试连接'}
+              </button>
+              <div className="bg-white/5 border border-white/10 rounded-xl px-4 py-3">
+                <p className="text-xs text-white/50 mb-2">使用说明：</p>
+                <ol className="text-xs text-white/40 space-y-1 list-decimal list-inside">
+                  <li>下载并安装 ComfyUI</li>
+                  <li>启动 ComfyUI 服务（默认端口 8188）</li>
+                  <li>确保工作流文件存在：data/comfyui_default_workflow.json</li>
+                  <li>点击"测试连接"验证配置</li>
+                </ol>
               </div>
             </>
           )}

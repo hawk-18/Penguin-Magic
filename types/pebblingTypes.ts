@@ -1,5 +1,5 @@
 
-export type NodeType = 'text' | 'image' | 'idea' | 'edit' | 'video' | 'combine' | 'llm' | 'resize' | 'relay' | 'remove-bg' | 'upscale' | 'bp';
+export type NodeType = 'text' | 'image' | 'idea' | 'edit' | 'video' | 'combine' | 'llm' | 'resize' | 'relay' | 'remove-bg' | 'upscale' | 'bp' | 'composer-anchor';
 
 export type NodeStatus = 'idle' | 'running' | 'completed' | 'error';
 

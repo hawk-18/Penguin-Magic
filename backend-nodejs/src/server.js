@@ -2,6 +2,7 @@
 
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs');
 const path = require('path');
 const config = require('./config');
 const JsonStorage = require('./utils/jsonStorage');
@@ -15,8 +16,12 @@ const settingsRouter = require('./routes/settings');
 const desktopRouter = require('./routes/desktop');
 const imageOpsRouter = require('./routes/imageOps');
 const canvasRouter = require('./routes/canvas');
+const aiRouter = require('./routes/ai');
 
 const app = express();
+
+// Debug NDJSON（会话 126315）：写入项目根，供 Cursor 读取；需本地 Node 后端与 Vite /api 代理同时可用
+const DEBUG_SESSION_LOG_PATH = path.join(path.resolve(__dirname, '..', '..'), 'debug-126315.log');
 
 // ============== 中间件配置 ==============
 app.use(cors()); // CORS支持
@@ -83,6 +88,19 @@ app.use('/api/settings', settingsRouter);
 app.use('/api/desktop', desktopRouter);
 app.use('/api/image-ops', imageOpsRouter);
 app.use('/api/canvas', canvasRouter);
+app.use('/api/ai', aiRouter);
+
+app.post('/api/debug-session-log', (req, res) => {
+  try {
+    if (req.body && typeof req.body === 'object') {
+      fs.appendFileSync(DEBUG_SESSION_LOG_PATH, `${JSON.stringify(req.body)}\n`, 'utf8');
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('debug-session-log:', err.message);
+    res.status(500).json({ ok: false });
+  }
+});
 
 // 服务状态检查
 app.get('/api/status', (req, res) => {

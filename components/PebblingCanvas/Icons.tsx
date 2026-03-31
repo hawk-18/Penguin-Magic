@@ -5,6 +5,7 @@ import {
   Minus,
   Type, 
   Image as ImageIcon, 
+  ArrowRight,
   Sparkles, 
   Move, 
   Layout, 
@@ -29,7 +30,8 @@ import {
   Copy,
   Info,
   Wrench,
-  Expand
+  Expand,
+  RefreshCw
 } from 'lucide-react';
 
 export const Icons = {
@@ -37,6 +39,7 @@ export const Icons = {
   Minus,
   Type,
   Image: ImageIcon,
+  ArrowRight,
   Sparkles,
   Move,
   Layout,
@@ -61,5 +64,7 @@ export const Icons = {
   Copy,
   Info,
   Wrench,
-  Expand
+  Expand,
+  /** 重新生成 */
+  Refresh: RefreshCw
 };
