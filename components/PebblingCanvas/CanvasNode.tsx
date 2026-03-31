@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef, Suspense, lazy } from 'react';
 import { createPortal } from 'react-dom';
 import { CanvasNode, NodeType, getNodeTypeColor } from '../../types/pebblingTypes';
+import { resolveBackendUrl } from '../../services/api';
 import { Icons } from './Icons';
 import { ImageSuggestionPanel } from './ImageSuggestionPanel';
 import { ChevronDown } from 'lucide-react';
@@ -516,7 +517,7 @@ const CanvasNodeItem: React.FC<CanvasNodeProps> = ({
                 </div>
                 <div className="flex-1 relative overflow-hidden">
                     <img 
-                        src={node.content} 
+                        src={resolveBackendUrl(node.content)} 
                         alt="Resized" 
                         className="w-full h-full object-contain" 
                         draggable={false}
@@ -928,7 +929,7 @@ const CanvasNodeItem: React.FC<CanvasNodeProps> = ({
                     // 有图片：显示结果
                     <div className="flex-1 relative bg-black">
                         <img 
-                            src={node.content} 
+                            src={resolveBackendUrl(node.content)} 
                             alt="Result" 
                             className="w-full h-full object-contain" 
                             draggable={false}
@@ -1180,7 +1181,7 @@ const CanvasNodeItem: React.FC<CanvasNodeProps> = ({
              <>
                 <div className="absolute inset-0 bg-zinc-900 z-0" />
                 <img 
-                    src={node.content} 
+                    src={resolveBackendUrl(node.content)} 
                     alt="Image" 
                     className="relative z-10 w-full h-full object-contain select-none pointer-events-none" 
                     draggable={false}
@@ -1371,7 +1372,7 @@ const CanvasNodeItem: React.FC<CanvasNodeProps> = ({
                     </div>
                     <div className="flex-1 relative min-h-0">
                     <video 
-                        src={node.content} 
+                        src={resolveBackendUrl(node.content)} 
                         controls
                         loop
                         autoPlay
@@ -1820,7 +1821,7 @@ const CanvasNodeItem: React.FC<CanvasNodeProps> = ({
                     </div>
                     <div className="flex-1 relative overflow-hidden">
                         <img 
-                            src={node.content} 
+                            src={resolveBackendUrl(node.content)} 
                             alt="Output" 
                             className="w-full h-full object-contain" 
                             draggable={false}

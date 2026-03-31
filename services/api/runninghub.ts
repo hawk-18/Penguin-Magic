@@ -1,5 +1,5 @@
 // RunningHub API 服务
-import { post, get } from './index';
+import { post, get, API_BASE } from './index';
 
 // ============================================
 // 类型定义
@@ -114,7 +114,7 @@ export const uploadToRunningHub = async (
 
     const token = localStorage.getItem('auth_token');
 
-    const response = await fetch('/api/runninghub/upload', {
+    const response = await fetch(`${API_BASE}/runninghub/upload`, {
         method: 'POST',
         headers: {
             ...(token ? { 'Authorization': `Bearer ${token}` } : {})

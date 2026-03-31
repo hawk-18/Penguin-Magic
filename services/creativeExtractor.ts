@@ -3,6 +3,8 @@
  * 用于从前端获取并提取创意数据
  */
 
+import { API_BASE } from './api';
+
 interface CreativeRecord {
   id: number;
   title: string;
@@ -54,7 +56,7 @@ class CreativeExtractor {
     // 为了处理CORS问题，通过后端代理请求外部数据
     // 确保URL被正确编码
     const encodedUrl = encodeURIComponent(url);
-    const proxyUrl = `/api/creative-ideas/external-data?url=${encodedUrl}`;
+    const proxyUrl = `${API_BASE}/creative-ideas/external-data?url=${encodedUrl}`;
     
     const response = await fetch(proxyUrl, {
       headers: {

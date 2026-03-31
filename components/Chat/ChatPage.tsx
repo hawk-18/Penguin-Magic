@@ -48,6 +48,7 @@ import {
   type AiChatSession,
   updateChatSession,
 } from '../../services/api/ai';
+import { API_BASE } from '../../services/api';
 
 type SkillKey = 'image' | 'code' | 'video' | 'write' | 'translate' | 'analysis' | 'chat';
 type ChatMessageKind = 'text' | 'image' | 'video';
@@ -1467,7 +1468,7 @@ export function ChatPage(props: { onExitToDesktop?: () => void }) {
     onContent: (chunk: string, fullText: string) => void;
   }): Promise<string> {
     const memory = opts.memoryMessages ?? [];
-    const response = await fetch('/api/ai/chat', {
+    const response = await fetch(`${API_BASE}/ai/chat`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

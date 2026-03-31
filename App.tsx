@@ -19,6 +19,7 @@ import { HistoryStrip } from './components/HistoryStrip';
 import * as creativeIdeasApi from './services/api/creativeIdeas';
 import * as historyApi from './services/api/history';
 import * as desktopApi from './services/api/desktop';
+import { API_BASE } from './services/api';
 import { saveToOutput, saveToInput, downloadRemoteToOutput } from './services/api/files';
 import { downloadImage } from './services/export';
 import { ThemeProvider, useTheme, SnowfallEffect } from './contexts/ThemeContext';
@@ -1892,7 +1893,7 @@ const App: React.FC = () => {
   useEffect(() => {
     const checkBackendHealth = async () => {
       try {
-        const response = await fetch('/api/status', { 
+        const response = await fetch(`${API_BASE}/status`, { 
           method: 'GET',
           signal: AbortSignal.timeout(5000) // 5秒超时
         });
@@ -2430,7 +2431,7 @@ const App: React.FC = () => {
       console.log('开始智能导入，ID范围:', idRange);
       
       // 调用后端智能导入API
-      const response = await fetch('/api/creative-ideas/smart-import', {
+      const response = await fetch(`${API_BASE}/creative-ideas/smart-import`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

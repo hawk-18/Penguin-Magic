@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ThirdPartyApiConfig, getApiConfig, saveApiConfig, checkBalance } from '../../services/pebblingGeminiService';
 import { getAiConfig } from '../../services/api/ai';
+import { API_BASE } from '../../services/api';
 import { SoraConfig, getSoraConfig, saveSoraConfig } from '../../services/soraService';
 import { Icons } from './Icons';
 
@@ -60,7 +61,7 @@ const ApiSettings: React.FC<ApiSettingsProps> = ({ isOpen, onClose }) => {
       
       // 加载 ComfyUI 配置
       try {
-        const resp = await fetch('/api/ai/comfyui/config');
+        const resp = await fetch(`${API_BASE}/ai/comfyui/config`);
         const json = await resp.json();
         if (json.success && json.data) {
           setComfyuiConfig({
@@ -83,7 +84,7 @@ const ApiSettings: React.FC<ApiSettingsProps> = ({ isOpen, onClose }) => {
       saveApiConfig(config);
       saveSoraConfig(soraConfig);
       // 保存 ComfyUI 配置
-      await fetch('/api/ai/comfyui/config', {
+      await fetch(`${API_BASE}/ai/comfyui/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(comfyuiConfig)
@@ -129,13 +130,13 @@ const ApiSettings: React.FC<ApiSettingsProps> = ({ isOpen, onClose }) => {
     setComfyuiStatus('');
     try {
       // 先保存配置
-      await fetch('/api/ai/comfyui/config', {
+      await fetch(`${API_BASE}/ai/comfyui/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(comfyuiConfig)
       });
       
-      const resp = await fetch('/api/ai/comfyui/test', { method: 'POST' });
+      const resp = await fetch(`${API_BASE}/ai/comfyui/test`, { method: 'POST' });
       const json = await resp.json();
       
       if (json.success && json.connected) {

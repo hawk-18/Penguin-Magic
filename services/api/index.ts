@@ -1,8 +1,37 @@
 // API 基础配置和请求封装
-// 本地版本 - 连接到 Node.js 后端
+// 默认使用相对路径 `/api`（本地开发时由 Vite 代理到 Node 后端）。
+// 部署静态前端时设置环境变量 VITE_API_BASE 为后端根地址（无尾斜杠），例如 https://api.example.com
 
-// 本地后端API地址
-const API_BASE = '/api';
+function trimTrailingSlash(s: string): string {
+  return s.replace(/\/$/, '');
+}
+
+const envOrigin =
+  typeof import.meta.env.VITE_API_BASE === 'string' ? import.meta.env.VITE_API_BASE.trim() : '';
+/** 后端 HTTP 根地址；未配置时为空字符串，表示与当前页面同源 */
+export const API_ORIGIN = envOrigin ? trimTrailingSlash(envOrigin) : '';
+
+/** 与后端 `app.use('/api', …)` 一致；未设置 VITE_API_BASE 时为 `/api` */
+export const API_BASE = API_ORIGIN ? `${API_ORIGIN}/api` : '/api';
+
+/**
+ * 将后端返回的相对路径（如 `/api/output/a.png`、`/files/input/x.png`）转为可请求的 URL。
+ * 未设置 VITE_API_BASE 时保持相对路径。
+ */
+export function resolveBackendUrl(path: string): string {
+  if (!path) return path;
+  if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('//')) {
+    return path;
+  }
+  if (path.startsWith('data:') || path.startsWith('blob:')) {
+    return path;
+  }
+  if (API_ORIGIN) {
+    const p = path.startsWith('/') ? path : `/${path}`;
+    return `${API_ORIGIN}${p}`;
+  }
+  return path.startsWith('/') ? path : `/${path}`;
+}
 
 /**
  * 统一 API 响应类型
@@ -121,5 +150,3 @@ export const getServerStatus = async () => {
     output_dir: string;
   }>('/status');
 };
-
-export { API_BASE };

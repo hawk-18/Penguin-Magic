@@ -6,6 +6,7 @@ import { ImageSuggestionPanel, type ImageSuggestionKind } from './ImageSuggestio
 import { NodeType, NodeData, CanvasPreset } from '../../types/pebblingTypes';
 import { CanvasListItem } from '../../services/api/canvas';
 import { CreativeIdea } from '../../types';
+import { API_BASE } from '../../services/api';
 
 // 香蕉SVG图标组件
 const BananaIcon: React.FC<{ size?: number; className?: string }> = ({ size = 14, className = '' }) => (
@@ -429,7 +430,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     setComfyuiStatus('checking');
     setComfyuiError('');
     try {
-      const resp = await fetch('/api/ai/comfyui/test', { method: 'POST' });
+      const resp = await fetch(`${API_BASE}/ai/comfyui/test`, { method: 'POST' });
       const json = await resp.json();
       if (json.success && json.connected) {
         setComfyuiStatus('connected');
@@ -704,7 +705,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const pollVideoTask = useCallback(async (taskId: string, maxAttempts: number = 120, intervalMs: number = 5000) => {
     for (let i = 0; i < maxAttempts; i++) {
       try {
-        const resp = await fetch(`/api/ai/video-task/${taskId}`);
+        const resp = await fetch(`${API_BASE}/ai/video-task/${taskId}`);
         const json = await resp.json();
         
         if (json.success && json.data) {
@@ -917,7 +918,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         
         console.log('[视频生成] 发送请求:', body);
         
-        const resp = await fetch('/api/ai/generate', {
+        const resp = await fetch(`${API_BASE}/ai/generate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),

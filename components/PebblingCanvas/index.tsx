@@ -12,6 +12,7 @@ import CanvasNameBadge from './CanvasNameBadge';
 import { editImageWithGemini, chatWithThirdPartyApi, getThirdPartyConfig, ImageEditConfig } from '../../services/geminiService';
 import * as canvasApi from '../../services/api/canvas';
 import { downloadRemoteToOutput } from '../../services/api/files';
+import { API_BASE, resolveBackendUrl } from '../../services/api';
 import { Icons } from './Icons';
 import { useTheme } from '../../contexts/ThemeContext';
 
@@ -254,7 +255,7 @@ async function pollArkVideoTaskForPreview(taskId: string, maxAttempts = 120, int
   const id = encodeURIComponent(String(taskId).trim());
   for (let i = 0; i < maxAttempts; i++) {
     try {
-      const resp = await fetch(`/api/ai/video-task/${id}`);
+      const resp = await fetch(`${API_BASE}/ai/video-task/${id}`);
       const json = await resp.json();
       if (json.success && json.data) {
         const status = String(json.data.status || '').toLowerCase();
@@ -1628,7 +1629,7 @@ const PebblingCanvas: React.FC<PebblingCanvasProps> = ({
           
           // 调用后端 API 保存视频文件到 output 目录
           try {
-              const saveResponse = await fetch('/api/files/save-video', {
+              const saveResponse = await fetch(`${API_BASE}/files/save-video`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ videoData: base64Video })
@@ -2706,7 +2707,7 @@ const PebblingCanvas: React.FC<PebblingCanvasProps> = ({
                        if (img.startsWith('/files/')) {
                            console.log('[Video节点] 检测到本地路径，开始转换为 base64:', img);
                            try {
-                               const fullUrl = `${window.location.origin}${img}`;
+                               const fullUrl = resolveBackendUrl(img);
                                const response = await fetch(fullUrl);
                                if (!response.ok) throw new Error(`获取图片失败: ${response.status}`);
                                const blob = await response.blob();
@@ -3833,7 +3834,7 @@ const PebblingCanvas: React.FC<PebblingCanvasProps> = ({
           }
           let resp: Response;
           try {
-            resp = await fetch('/api/ai/generate', {
+            resp = await fetch(`${API_BASE}/ai/generate`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(body),
@@ -4370,7 +4371,7 @@ const PebblingCanvas: React.FC<PebblingCanvasProps> = ({
                             
                             // 相对路径转绝对路径
                             if (content.startsWith('/files/') || content.startsWith('/api/')) {
-                                urlToFetch = `http://localhost:8765${content}`;
+                                urlToFetch = resolveBackendUrl(content);
                             }
                             
                             console.log('[Download] 正在下载:', urlToFetch);
