@@ -41,7 +41,7 @@ export const chatCompletionSync = async (
 
 /**
  * 非流式聊天：走 `/ai/chat/sync`，返回 OpenAI 兼容结构（便于沿用 choices[0].message.content）。
- * 流式请直接使用 fetch('/api/ai/chat') 读 SSE（见 ChatPage.streamChatCompletion）。
+ * 流式请使用 ChatPage.streamChatCompletion 中的 fetch（见 services/api/index 的 API_BASE）。
  */
 export const chatCompletion = async (
   request: OpenAIChatRequest
