@@ -1,6 +1,6 @@
 
 
-# 🐧 企鹅工坊 Penguin Magic
+# 🐧 企鹅工坊 Penguin Magic 二次开发
 
 ### AI 图像 / 视频创作与桌面管理工具
 
