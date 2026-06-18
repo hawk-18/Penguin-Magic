@@ -1,6 +1,4 @@
-<div align="center">
 
-<img width="320" alt="企鹅工坊 Penguin Magic" src="https://github.com/user-attachments/assets/4195dd2a-a70b-49b9-bd47-7fa503822cb3" />
 
 # 🐧 企鹅工坊 Penguin Magic
 
